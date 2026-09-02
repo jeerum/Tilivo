@@ -4,6 +4,9 @@
 
 **v0.2 (Identity) + kontrollitud rename MRJKP -> Tilivo**
 
+Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (vt
+`docs/SECURITY_REVIEW_V0_2.md`).
+
 ## Completed
 
 - v0.1 hardening: backup systemd timer'iga, restore-test, health endpoint, ADR-0004.
@@ -18,6 +21,8 @@
   - DB: `tilivo_accounting`, kasutaja `tilivo_app`;
   - backup systemd: `tilivo-backup.service/timer`;
   - füüsiline volume legacy nimega säilitatud (andmete turvalisus).
+- Security review parandused: token/challenge race, TOTP replay, IDOR session revoke, timing enumeration,
+  dev e-mail guard, Cache-Control, trust boundary, 2FA cooldown.
 
 ## In progress
 
@@ -40,7 +45,7 @@
 
 ```text
 npm run test:ci PASS (lint, typecheck, API unit, web unit, build)
-Serveris test-DB: 36/36 PASS
+Serveris test-DB: 43/43 PASS (sh race/IDOR/replay security testid)
 Migratsioon up/down PASS
 Backup PASS, restore PASS
 ```

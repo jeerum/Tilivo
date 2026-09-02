@@ -1,5 +1,14 @@
 # Changelog
 
+## [Security review 2026-09-02] - v0.2
+
+- Harden: verification/reset/challenge one-time atomicity.
+- TOTP replay protection (`last_used_counter`).
+- IDOR session revoke -> 404; timing enumeration mitigatsioon.
+- `Cache-Control: no-store` auth vastustel; explicit trust proxy CIDR.
+- Config guard: dev email/outbox keelatud production'is.
+- Docs: `docs/SECURITY_REVIEW_V0_2.md`, ADR-0006.
+
 ## [Rename 2026-09-02] - MRJKP -> Tilivo
 
 - Toote branding, HTML/UI, README/docs: Tilivo.

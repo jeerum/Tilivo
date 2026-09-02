@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Writable } from 'node:stream';
 import Fastify, { LogController, type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
@@ -16,11 +17,13 @@ import { createEmailProvider } from './services/emailProvider';
 export interface BuildAppOptions {
   config: AppConfig;
   db: Db;
+  loggerStream?: Writable;
 }
 
-function makeLoggerOptions(config: AppConfig): FastifyServerOptions['logger'] {
+function makeLoggerOptions(config: AppConfig, loggerStream?: Writable): FastifyServerOptions['logger'] {
   return {
     level: config.LOG_LEVEL,
+    ...(loggerStream ? { stream: loggerStream } : {}),
     redact: {
       paths: [
         'req.headers.authorization',
@@ -34,9 +37,9 @@ function makeLoggerOptions(config: AppConfig): FastifyServerOptions['logger'] {
   };
 }
 
-export async function buildApp({ config, db }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp({ config, db, loggerStream }: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: makeLoggerOptions(config),
+    logger: makeLoggerOptions(config, loggerStream),
     requestIdHeader: 'x-trace-id',
     logController: new LogController({ requestIdLogLabel: 'trace_id' }),
     genReqId: () => crypto.randomUUID(),

@@ -18,6 +18,7 @@
 - Standard RFC 6238 TOTP (HMAC-SHA1, 30 s, 6 numbrit, ±1 samm).
 - Secret genereeritakse serveris ja salvestatakse **AES-256-GCM** krüpteerituna
   (`TOTP_ENCRYPTION_KEY` keskkonnast; envelope `v1:iv:tag:ciphertext`).
+- Replay protection: `totp_credentials.last_used_counter` – sama ajavahemiku koodi ei saa uuesti kasutada.
 - Recovery codes: 10 koodi, DB-s hash'itult, ühekordsed; uue komplekti loomine kustutab vana.
 - Võtmerotatsioon tulevikus: dekrüpteeri vana, krüpteeri uue võtmega (dokumenteeritud, mitte veel CLI).
 
@@ -27,6 +28,8 @@
 - Serveris hoitakse `token_hash`, `csrf_token_hash`, `expires_at`, `revoked_at`, `remember_me`.
 - Parooli lähtestamine/vahetamine revoke'ib teised sessioonid; logout revoke'ib praeguse.
 - IP-d ei kasutata identiteedi tõeallikana; IP läheb ainult audit- ja auth_attempts-metadatasse.
+- Trust boundary: `TRUST_PROXY_CIDRS` (loopback + privaatvõrgud); X-Forwarded-For usaldatakse ainult
+  sealt. Avaliku reverse proxy lisamisel kitsenda nimekiri.
 
 ## Rate limiting / brute force
 
@@ -39,10 +42,17 @@
 
 - `audit_events` on append-only (kood ei paku update/delete).
 - Audit ei sisalda paroole, tokeneid, TOTP secret'e ega recovery code'e.
+- Auth vastustel on `Cache-Control: no-store`.
 
 ## Enumeration
 
 - Register, resend ja forgot annavad alati sama generilise vastuse.
 - Login annab üldise "Invalid email or password"; e-maili olemasolu selgub alles pärast õiget parooli
   (ja siis ainult kinnituse staatuse kaudu).
+- Timing: register teeb hash'i enne konto olemasolu kontrolli; olematu konto login teeb dummy Argon2
+  verifitseerimise, et ajastus ei lekiks e-maili olemasolu.
 
+## dev e-mail
+
+- `EMAIL_DRIVER=dev` ja `EMAIL_DEV_OUTBOX=true` on lubatud ainult development/test; production config
+  lükkab need tagasi. Production API-l puudub outboxi lugemise route.
