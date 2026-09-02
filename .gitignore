@@ -16,8 +16,15 @@ server.local.md
 # Deploy artifacts and temp files
 *.tar.gz
 tmp_*.sh
+tmp_smoke_files/
+tmp_*.json
+tmp_*.txt
+tmp_cookies*.txt
 *.log
 backups/
+apps/web/e2e/.auth.json
+apps/web/test-results/
+apps/web/playwright-report/
 
 # OS / editor noise
 .DS_Store
