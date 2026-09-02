@@ -43,14 +43,16 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
 - Volume füüsiline nimi on legacy (`mrjkp-accounting-db-data`) – teadlik otsus, et andmeid mitte
   kopeerida ega riskida; dokumenteeritud.
 - `/opt/mrjkp-accounting` (pre-rename koopia) jääb alles kuni eraldi kokkuleppeni.
-- v0.4 lõpetamata osad: täielik dokumentide hostile testmaatriks, object-storage backup scheduler,
-  UI responsive/E2E testid ja audit hash-chain tamper-test.
+- v0.4 tehtud täiendused: dokumentide hostile-maatriks + signature validation, audit hash-chain
+  tamper-test, object-storage backup (tilivo-backup.sh), settings desktop nav, mobile drawer,
+  UA parser.
+- V0.4 lõpetamata: production document/audit smoke, object-restore+SHA-256 protseduur, UI E2E.
 
 ## Tests
 
 ```text
 npm run test:ci PASS (lint, typecheck, API unit, web unit, build)
-Serveris test-DB: 55/55 PASS (v0.2 auth + v0.3 tenant/RLS + v0.4 audit/inbox/outbox)
+Serveris test-DB: 57/57 PASS (sh v0.4 hostile doc matrix + audit tamper)
 Migratsioon up/down PASS
 Backup PASS, restore PASS
 ```
