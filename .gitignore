@@ -17,10 +17,10 @@ server.local.md
 *.tar.gz
 tmp_*.sh
 *.log
+backups/
 
 # OS / editor noise
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
 import { loadConfig, type AppConfig } from '../src/config/env';
-import type { Queryable } from '../src/db/pool';
+import type { Db } from '../src/db/pool';
 import { ErrorCodes } from '../src/lib/errors';
 
 const openApps: FastifyInstance[] = [];
@@ -15,21 +15,22 @@ function testConfig(overrides: Record<string, string> = {}): AppConfig {
     DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
     LOG_LEVEL: 'silent',
     EXPOSE_DOCS: 'false',
+    TOTP_ENCRYPTION_KEY: 'a'.repeat(64),
     ...overrides,
   });
 }
 
-const okDb: Queryable = {
+const okDb = {
   query: async () => ({ rows: [{ ok: 1 }] }),
-};
+} as unknown as Db;
 
-const downDb: Queryable = {
+const downDb = {
   query: async () => {
     throw new Error('connection refused');
   },
-};
+} as unknown as Db;
 
-async function makeApp(db: Queryable): Promise<FastifyInstance> {
+async function makeApp(db: Db): Promise<FastifyInstance> {
   const app = await buildApp({ config: testConfig(), db });
   openApps.push(app);
   return app;
@@ -51,7 +52,7 @@ describe('health endpoint', () => {
     expect(response.json()).toMatchObject({
       status: 'ok',
       checks: { database: 'up' },
-      version: '0.1.0',
+      version: '0.2.0',
       environment: 'test',
     });
   });
@@ -112,11 +113,11 @@ describe('route and error handling', () => {
   });
 
   it('returns structured errors for unknown failures without leaking internals', async () => {
-    const failingDb: Queryable = {
+    const failingDb = {
       query: async () => {
         throw new Error('sensitive internals: SELECT * FROM credentials');
       },
-    };
+    } as unknown as Db;
     const app = await buildApp({
       config: testConfig({ NODE_ENV: 'production' }),
       db: failingDb,
@@ -126,5 +127,26 @@ describe('route and error handling', () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/health' });
     expect(response.statusCode).toBe(503);
     expect(response.json().error.message).not.toContain('credentials');
+    expect(response.json().version).toBeUndefined();
+    expect(response.json().environment).toBeUndefined();
+  });
+
+  it('hides environment and version details from health in production', async () => {
+    const app = await buildApp({
+      config: testConfig({ NODE_ENV: 'production' }),
+      db: okDb,
+    });
+    openApps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/health' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'ok',
+      checks: { database: 'up' },
+    });
+    expect(response.json().version).toBeUndefined();
+    expect(response.json().environment).toBeUndefined();
+    expect(response.json().time).toBeUndefined();
+    expect(response.json().trace_id).toBeTruthy();
   });
 });

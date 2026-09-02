@@ -1,8 +1,11 @@
 import pg from 'pg';
 
 export interface Queryable {
-  query(text: string): Promise<{ rows: unknown[] }>;
+  query(text: string, values?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;
 }
+
+export type Db = pg.Pool;
+export type DbClient = pg.PoolClient;
 
 export function createPool(connectionString: string): pg.Pool {
   return new pg.Pool({

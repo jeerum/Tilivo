@@ -1,17 +1,21 @@
 import crypto from 'node:crypto';
 import Fastify, { LogController, type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import type { AppConfig } from './config/env';
-import type { Queryable } from './db/pool';
+import type { Db } from './db/pool';
 import { AppError, ErrorCodes, toErrorBody } from './lib/errors';
+import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
 import { rootRoutes } from './routes/root';
+import { createEmailProvider } from './services/emailProvider';
 
 export interface BuildAppOptions {
   config: AppConfig;
-  db: Queryable;
+  db: Db;
 }
 
 function makeLoggerOptions(config: AppConfig): FastifyServerOptions['logger'] {
@@ -48,12 +52,19 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
     },
   });
 
+  await app.register(cookie);
+  await app.register(rateLimit, {
+    global: true,
+    max: 300,
+    timeWindow: '1 minute',
+  });
+
   if (config.EXPOSE_DOCS) {
     await app.register(swagger, {
       openapi: {
         info: {
           title: 'MRJKP Accounting API',
-          description: 'Modular monolith accounting SaaS backend. v0.1 infrastructure.',
+          description: 'Modular monolith accounting SaaS backend. v0.2 Identity.',
           version: config.API_VERSION,
         },
         servers: [{ url: '/' }],
@@ -79,6 +90,14 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
     db,
     version: config.API_VERSION,
     environment: config.NODE_ENV,
+    exposeDetails: config.NODE_ENV !== 'production',
+  });
+
+  const emailProvider = createEmailProvider(config.EMAIL_DRIVER, config.EMAIL_DEV_OUTBOX, db);
+  await app.register(authRoutes, {
+    db,
+    emailProvider,
+    config,
   });
 
   app.setNotFoundHandler((request, reply) => {
@@ -89,6 +108,10 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
 
   app.setErrorHandler((error, request, reply) => {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
+    const rawStatus = (error as { statusCode?: unknown }).statusCode;
+    const statusCode =
+      typeof rawStatus === 'number' && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 500;
+    const isPublicMessage = config.NODE_ENV === 'development' || config.NODE_ENV === 'test';
 
     if (error instanceof AppError) {
       request.log.warn(
@@ -99,12 +122,24 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
       return toErrorBody(error.code, error.message, request.id);
     }
 
+    if (statusCode >= 400 && statusCode < 500) {
+      request.log.warn(
+        { err: normalizedError, error_id: ErrorCodes.invalidRequest, action: 'client_error' },
+        'client request failed',
+      );
+      reply.code(statusCode);
+      return toErrorBody(
+        ErrorCodes.invalidRequest,
+        isPublicMessage ? normalizedError.message : 'Request could not be processed',
+        request.id,
+      );
+    }
+
     request.log.error(
       { err: normalizedError, error_id: ErrorCodes.internal, action: 'unhandled_error' },
       'unhandled error',
     );
 
-    const isPublicMessage = config.NODE_ENV === 'development' || config.NODE_ENV === 'test';
     reply.code(500);
     return toErrorBody(
       ErrorCodes.internal,
