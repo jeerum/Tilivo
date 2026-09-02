@@ -2,7 +2,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { AppConfig } from '../config/env';
 import type { Db } from '../db/pool';
 import { AppError, ErrorCodes } from '../lib/errors';
-import { createJournalDraft, postJournal } from '../services/accountingService';
+import {
+  createJournalDraft,
+  postJournal,
+  reopenPeriod,
+  reverseJournal,
+  setPeriodStatus,
+} from '../services/accountingService';
 import { resolveSessionUser } from '../services/sessionContext';
 import { requirePermission, resolveTenantAccess, withTenantTransaction } from '../services/tenantService';
 
@@ -120,6 +126,38 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     const entryNumber = await postJournal(db, tenantId, request.params.id, userId);
     return reply.send({ status: 'POSTED', entry_number: entryNumber });
   });
+
+  app.post<{ Params: { id: string }; Body: { reason?: string } }>(
+    '/api/v1/journals/:id/reverse',
+    async (request, reply) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'journal.reverse');
+      const number = await reverseJournal(db, tenantId, request.params.id, userId, String(request.body?.reason ?? ''));
+      return reply.send({ status: 'REVERSED', reversal_entry_number: number });
+    },
+  );
+
+  app.patch<{ Params: { id: string }; Body: { status?: string } }>(
+    '/api/v1/accounting-periods/:id',
+    async (request, reply) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'period.manage');
+      const status = String(request.body?.status ?? '');
+      if (status !== 'SOFT_CLOSED' && status !== 'CLOSED') throw new AppError(ErrorCodes.invalidPeriodRange, 'Invalid period status', 400);
+      await setPeriodStatus(db, tenantId, request.params.id, status, userId);
+      return reply.send({ message: 'Period updated' });
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { reason?: string } }>(
+    '/api/v1/accounting-periods/:id/reopen',
+    async (request, reply) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'period.reopen');
+      await reopenPeriod(db, tenantId, request.params.id, userId, String(request.body?.reason ?? ''));
+      return reply.send({ message: 'Period reopened' });
+    },
+  );
 
   app.get('/api/v1/ledger', async (request) => {
     const { userId, tenantId } = await context(request, db, config);

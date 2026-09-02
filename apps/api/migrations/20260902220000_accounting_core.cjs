@@ -137,6 +137,18 @@ exports.up = (pgm) => {
   pgm.createIndex('journal_lines', ['tenant_id', 'journal_entry_id', 'line_number'], { unique: true });
   pgm.createIndex('journal_lines', ['tenant_id', 'account_id']);
 
+  pgm.createTable('journal_reversals', {
+    id: { type: 'uuid', primaryKey: true, default: pgm.func('gen_random_uuid()') },
+    tenant_id: { type: 'uuid', notNull: true, references: 'tenants', onDelete: 'CASCADE' },
+    original_entry_id: { type: 'uuid', notNull: true, references: 'journal_entries', onDelete: 'CASCADE' },
+    reversal_entry_id: { type: 'uuid', notNull: true, references: 'journal_entries', onDelete: 'CASCADE' },
+    reason: { type: 'text', notNull: true, default: '' },
+    created_by: { type: 'uuid', references: 'users', onDelete: 'SET NULL' },
+    created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
+  });
+  pgm.createIndex('journal_reversals', 'original_entry_id', { unique: true });
+  pgm.createIndex('journal_reversals', 'reversal_entry_id', { unique: true });
+
   const newPermissions = [
     ['accounting.read', 'Read accounting'],
     ['journal.create', 'Create journal drafts'],
@@ -245,7 +257,7 @@ exports.up = (pgm) => {
     FOR EACH ROW EXECUTE FUNCTION public.tilivo_journal_post_balanced()
   `);
 
-  for (const table of ['accounts','fiscal_years','accounting_periods','tax_codes','fx_rates','journal_entries','journal_lines']) {
+  for (const table of ['accounts','fiscal_years','accounting_periods','tax_codes','fx_rates','journal_entries','journal_lines','journal_reversals']) {
     pgm.sql(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
     pgm.sql(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
     pgm.sql(`CREATE POLICY tenant_all ON ${table}
@@ -258,6 +270,7 @@ exports.up = (pgm) => {
 };
 
 exports.down = (pgm) => {
+  pgm.dropTable('journal_reversals');
   pgm.dropTable('journal_lines');
   pgm.dropTable('journal_entries');
   pgm.dropTable('journal_sequences');
