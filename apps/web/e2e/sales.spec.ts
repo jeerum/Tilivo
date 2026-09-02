@@ -110,15 +110,18 @@ test.describe('sales desktop UI', () => {
   });
 
   test('creates a customer, drafts, issues, views PDF and credits the invoice', async ({ page }) => {
+    test.skip(test.info().project.name !== 'desktop', 'full sales flow runs on desktop; mobile has a responsive smoke');
     const tenant = await findQaTenant(page);
     await page.locator('select').first().selectOption({ label: tenant.name });
     await seedAccounting(page, tenant.id);
 
     // Customer tab
     await page.locator('[data-testid="tab-customers"]').click();
+    await page.locator('[data-testid="customers-panel"] summary').click();
     const customerName = `E2E Sales Customer ${Date.now()}`;
     await page.locator('[data-testid="customer-form"] input').first().fill(customerName);
-    await page.getByRole('button', { name: /Save|Salvesta/i }).click();
+    await page.locator('[data-testid="save-customer"]').click();
+    await expect(page.locator('.success-text')).toContainText(/created|loodud/i, { timeout: 15_000 });
     await expect(page.locator('[data-testid="customers-table"] tbody tr').first()).toBeVisible();
     await page.locator('[data-testid="customer-search"]').fill(customerName);
     await page.locator('[data-testid="search-customers"]').click();
@@ -127,33 +130,47 @@ test.describe('sales desktop UI', () => {
     // Invoice draft
     await page.locator('[data-testid="tab-invoices"]').click();
     await expect(page.locator('[data-testid="invoices-panel"]')).toBeVisible();
+    await page.locator('[data-testid="invoices-panel"] summary').click();
     const customerId = page.locator('[data-testid="invoice-draft-form"] select').first();
     await customerId.selectOption({ label: customerName });
 
-    const descriptionInput = page.locator('[data-testid="invoice-draft-form"] input[aria-label*="description" i]').first();
+    const descriptionInput = page.locator('[data-testid="line-description-1"]');
     await descriptionInput.fill('E2E consulting');
-    const priceInput = page.locator('[data-testid="invoice-draft-form"] input[aria-label*="unit price" i]').first();
+    const priceInput = page.locator('[data-testid="line-price-1"]');
     await priceInput.fill('100');
-    const taxSelect = page.locator('[data-testid="invoice-draft-form"] select[aria-label*="tax code" i]').first();
-    await taxSelect.selectOption({ label: /FI24/ });
+    const taxSelect = page.locator('[data-testid="line-tax-1"]');
+    const optionValue = await taxSelect
+      .locator('option')
+      .filter({ hasText: 'FI24' })
+      .first()
+      .getAttribute('value');
+    await taxSelect.selectOption(optionValue ?? '');
     await expect(page.locator('[data-testid="totals-preview"]')).toContainText('100.00');
 
-    await page.getByRole('button', { name: /Save draft|Salvesta mustand/i }).click();
-    await page.locator('[data-testid="invoice-search"]').fill(customerName);
-    await page.locator('[data-testid="invoice-refresh"]').click();
-    await expect(page.locator('[data-testid="invoices-table"] tbody tr').first()).toContainText(customerName);
+    await page.locator('[data-testid="save-draft"]').click();
+    const draftRow = page.locator('[data-testid="invoices-table"] tbody tr').filter({ hasText: customerName }).first();
+    await expect(draftRow).toBeVisible();
 
     // Issue via list row action
-    const row = page.locator('[data-testid="invoices-table"] tbody tr').first();
-    await row.getByRole('button', { name: /Issue|Esita/i }).click();
+    await draftRow.getByRole('button', { name: /Issue|Esita/i }).click();
     await expect(page.locator('.success-text')).toContainText(/issued|esitatud/i, { timeout: 15_000 });
 
     // Open detail: read-only invoice with number, PDF and journal link
-    await page.locator('[data-testid="invoices-table"] tbody tr').first().getByRole('button', { name: /Open invoice|Ava arve/i }).click();
+    const issuedRow = page.locator('[data-testid="invoices-table"] tbody tr').filter({ hasText: customerName }).first();
+    await issuedRow.getByRole('button', { name: /Open invoice|Ava arve/i }).click();
     await expect(page.locator('[data-testid="invoice-detail"]')).toBeVisible();
     await expect(page.locator('[data-testid="invoice-detail"] h3')).not.toHaveText(/Draft|Mustand/i);
     await expect(page.locator('[data-testid="detail-totals"]')).toContainText(/124\.00|100\.00/);
-    await expect(page.locator('[data-testid="pdf-status"]')).toContainText(/Ready|Valmis/i, { timeout: 30_000 });
+    const pdfStatus = page.locator('[data-testid="pdf-status"]');
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const statusText = await pdfStatus.textContent();
+      if (/Ready|Valmis/i.test(statusText ?? '')) break;
+      await page.waitForTimeout(3000);
+      const refreshRow = page.locator('[data-testid="invoices-table"] tbody tr').filter({ hasText: customerName }).first();
+      await refreshRow.getByRole('button', { name: /Open invoice|Ava arve/i }).click();
+      await expect(page.locator('[data-testid="invoice-detail"]')).toBeVisible();
+    }
+    await expect(pdfStatus).toContainText(/Ready|Valmis/i, { timeout: 10_000 });
     await expect(page.getByRole('button', { name: /Download PDF|Laadi PDF alla/i })).toBeVisible();
 
     // Issue an edit attempt through the UI is impossible (read-only view)

@@ -219,7 +219,11 @@ export function SalesPage() {
   const submitCustomer = async (event: FormEvent) => {
     event.preventDefault();
     await run(async () => {
-      const body: Record<string, unknown> = { ...customerDraft, payment_terms_days: Number(customerDraft.payment_terms_days) };
+      const body: Record<string, unknown> = {
+        ...customerDraft,
+        email: customerDraft.email.trim() ? customerDraft.email.trim() : null,
+        payment_terms_days: Number(customerDraft.payment_terms_days),
+      };
       if (editingCustomerId) {
         await api(`/api/v1/customers/${editingCustomerId}`, { method: 'PATCH', csrf, headers, body });
       } else {
@@ -532,7 +536,7 @@ export function SalesPage() {
                 </label>
               </div>
               <div>
-                <button type="submit" className="primary">{t('save')}</button>
+                <button type="submit" className="primary" data-testid="save-customer">{t('save')}</button>
                 {editingCustomerId && (
                   <button type="button" onClick={resetCustomerDraft}>{t('cancel')}</button>
                 )}
@@ -619,6 +623,7 @@ export function SalesPage() {
                 <div className="entry-line-row" key={line.key}>
                   <input
                     aria-label={`${t('description')} ${line.key}`}
+                    data-testid={`line-description-${line.key}`}
                     placeholder={t('description')}
                     value={line.description}
                     onChange={(event) => updateLine(line.key, { description: event.target.value })}
@@ -641,6 +646,7 @@ export function SalesPage() {
                     min="0"
                     step="0.01"
                     aria-label={`${t('unitPrice')} ${line.key}`}
+                    data-testid={`line-price-${line.key}`}
                     value={line.unit_price}
                     onChange={(event) => updateLine(line.key, { unit_price: event.target.value })}
                   />
@@ -655,6 +661,7 @@ export function SalesPage() {
                   />
                   <select
                     aria-label={`${t('taxCode')} ${line.key}`}
+                    data-testid={`line-tax-${line.key}`}
                     value={line.tax_code_id}
                     onChange={(event) => updateLine(line.key, { tax_code_id: event.target.value })}
                   >
@@ -670,7 +677,7 @@ export function SalesPage() {
               ))}
               <div>
                 <button type="button" onClick={addLine}>+</button>
-                <button type="button" className="primary" onClick={() => void saveDraft()}>{t('saveDraft')}</button>
+                <button type="button" className="primary" data-testid="save-draft" onClick={() => void saveDraft()}>{t('saveDraft')}</button>
               </div>
               <p data-testid="totals-preview">
                 {t('subtotal')}: {totals.subtotal} | {t('taxTotal')}: {totals.tax} | {t('total')}: {totals.total}

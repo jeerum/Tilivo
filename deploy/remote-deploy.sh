@@ -39,6 +39,7 @@ echo "==> migrations"
 docker compose run --rm --no-deps tilivo-api node dist/migrate.js up
 
 echo "==> up worker"
+docker compose build tilivo-worker
 docker compose up -d tilivo-worker
 
 echo "==> smoke tests"
