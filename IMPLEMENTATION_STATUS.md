@@ -51,17 +51,16 @@ apps/api:  lint PASS, typecheck PASS, unit tests 11 PASS (2 integration skipped 
 apps/web:  lint PASS, typecheck PASS, unit tests 3 PASS, build PASS
 ```
 
-Integration-testid migreeritud test-DB vastu: jooksevad serveris `docker compose --profile test run --rm
-accounting-test` (migration up + `npm test` koos `TEST_DATABASE_URL`-ga).
+Integration-testid migreeritud test-DB vastu (serveris): `docker compose --profile test run --rm
+accounting-test` – **13/13 PASS**; migratsiooni rollback testitud (`down` + `up` test-DB-s).
 
 ## Deployment status
 
-- Deploy: tehtud `/opt/mrjkp-accounting`, containerid `mrjkp-accounting-*`, ainult `127.0.0.1:3100/3101`.
+- Deploy: tehtud `/opt/mrjkp-accounting` (2026-09-02), containerid `mrjkp-accounting-*`, ainult `127.0.0.1:3100/3101`.
 - Healthcheck: `GET /api/v1/health` PASS.
 - Frontend: `GET http://127.0.0.1:3101/` PASS.
-- Olemasolevad teenused enne ja pärast: kontrollitud (nginx, docker-containerid, pordid).
+- Olemasolevad teenused enne ja pärast: kontrollitud (nginx, docker-containerid, pordid) – muutumatud.
 
 ## Next step
 
 v0.2 Identity esimene slice: users tabel + registreerimise ja e-maili kinnituse API/protsess, testidega.
-
