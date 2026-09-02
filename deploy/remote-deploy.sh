@@ -18,6 +18,9 @@ docker compose config -q
 echo "==> build + up db"
 docker compose up -d --build tilivo-db
 
+echo "==> ensure runtime db role"
+./deploy/ensure-runtime-role.sh
+
 echo "==> build + up api and web"
 docker compose up -d --build tilivo-api tilivo-web
 

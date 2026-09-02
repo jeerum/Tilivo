@@ -10,10 +10,11 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+  const databaseUrl = process.env.MIGRATION_DATABASE_URL ?? config.DATABASE_URL;
 
   try {
     await runner({
-      databaseUrl: config.DATABASE_URL,
+      databaseUrl,
       dir: fileURLToPath(new URL('../migrations/', import.meta.url)),
       direction,
       migrationsTable: 'pgmigrations',

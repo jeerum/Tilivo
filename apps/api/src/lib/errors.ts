@@ -18,6 +18,15 @@ export const ErrorCodes = {
   authCsrfInvalid: 'AUTH-012',
   authAccountDisabled: 'AUTH-013',
   authPasswordPolicy: 'AUTH-014',
+  tenantInvalid: 'TENANT-001',
+  tenantAccessDenied: 'TENANT-002',
+  tenantSuspended: 'TENANT-003',
+  tenantMembershipInactive: 'TENANT-004',
+  memberNotFound: 'MEMBER-001',
+  memberLastOwner: 'MEMBER-002',
+  memberPermissionDenied: 'MEMBER-003',
+  roleInvalid: 'ROLE-001',
+  rolePermissionDenied: 'ROLE-002',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

@@ -81,14 +81,6 @@ interface CodeBody {
   code?: string;
 }
 
-const NO_CSRF_PATHS = new Set([
-  '/api/v1/auth/register',
-  '/api/v1/auth/login',
-  '/api/v1/auth/password/forgot',
-  '/api/v1/auth/password/reset',
-  '/api/v1/auth/email/verify',
-]);
-
 // Pre-computed in the background so that a login for a non-existent account
 // costs a password verification too (timing side-channel mitigation).
 const dummyArgonHashPromise = hashPassword('tilivo-timing-equalizer-not-a-real-password-2026');
@@ -252,26 +244,6 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
   app.addHook('onRequest', async (request, reply) => {
     if (request.url.startsWith('/api/v1/auth/')) {
       reply.header('Cache-Control', 'no-store');
-    }
-  });
-
-  app.addHook('onRequest', async (request) => {
-    const method = request.method.toUpperCase();
-    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
-    if (NO_CSRF_PATHS.has(request.url.split('?')[0] ?? '')) return;
-
-    const rawSession = request.cookies?.[config.SESSION_COOKIE_NAME];
-    if (!rawSession) return;
-    const session = await findSessionByToken(db, rawSession);
-    if (!session) return;
-    const headerCsrf = request.headers['x-csrf-token'];
-    const cookieCsrf = request.cookies?.[config.CSRF_COOKIE_NAME] ?? '';
-    if (
-      typeof headerCsrf !== 'string' ||
-      !cookieCsrf ||
-      hashToken(headerCsrf) !== session.csrfTokenHash
-    ) {
-      throw new AppError(ErrorCodes.authCsrfInvalid, 'CSRF validation failed', 403);
     }
   });
 

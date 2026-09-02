@@ -12,7 +12,10 @@ import { AppError, ErrorCodes, toErrorBody } from './lib/errors';
 import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
 import { rootRoutes } from './routes/root';
+import { tenantRoutes } from './routes/tenant';
 import { createEmailProvider } from './services/emailProvider';
+import { findSessionByToken } from './services/sessionService';
+import { hashToken } from './lib/security';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -60,6 +63,31 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
     global: true,
     max: 300,
     timeWindow: '1 minute',
+  });
+
+  const noCsrfPaths = new Set([
+    '/api/v1/auth/register',
+    '/api/v1/auth/login',
+    '/api/v1/auth/password/forgot',
+    '/api/v1/auth/password/reset',
+    '/api/v1/auth/email/verify',
+  ]);
+  app.addHook('onRequest', async (request) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method.toUpperCase())) return;
+    if (noCsrfPaths.has(request.url.split('?')[0] ?? '')) return;
+    const rawSession = request.cookies?.[config.SESSION_COOKIE_NAME];
+    if (!rawSession) return;
+    const session = await findSessionByToken(db, rawSession);
+    if (!session) return;
+    const headerCsrf = request.headers['x-csrf-token'];
+    const cookieCsrf = request.cookies?.[config.CSRF_COOKIE_NAME] ?? '';
+    if (
+      typeof headerCsrf !== 'string' ||
+      !cookieCsrf ||
+      hashToken(headerCsrf) !== session.csrfTokenHash
+    ) {
+      throw new AppError(ErrorCodes.authCsrfInvalid, 'CSRF validation failed', 403);
+    }
   });
 
   if (config.EXPOSE_DOCS) {
@@ -150,6 +178,10 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
   await app.register(authRoutes, {
     db,
     emailProvider,
+    config,
+  });
+  await app.register(tenantRoutes, {
+    db,
     config,
   });
   return app;

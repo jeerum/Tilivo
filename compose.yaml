@@ -9,8 +9,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tilivo_accounting}
       POSTGRES_USER: ${POSTGRES_USER:-tilivo_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TILIVO_RUNTIME_PASSWORD: ${TILIVO_RUNTIME_PASSWORD:?Set TILIVO_RUNTIME_PASSWORD in .env}
     volumes:
       - tilivo-db-data:/var/lib/postgresql/data
+      - ./deploy/db/init-runtime-role.sh:/docker-entrypoint-initdb.d/10-runtime-role.sh:ro
     networks:
       - tilivo
     healthcheck:
@@ -30,7 +32,8 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgres://tilivo_runtime:${TILIVO_RUNTIME_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       EXPOSE_DOCS: ${EXPOSE_DOCS:-false}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
@@ -81,8 +84,9 @@ services:
       target: test
     environment:
       NODE_ENV: test
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
-      TEST_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
+      DATABASE_URL: postgres://tilivo_runtime:${TILIVO_RUNTIME_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
+      TEST_DATABASE_URL: postgres://tilivo_runtime:${TILIVO_RUNTIME_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
       LOG_LEVEL: silent
       EMAIL_DRIVER: dev
       EMAIL_DEV_OUTBOX: "true"

@@ -19,7 +19,19 @@ export type AuditAction =
   | 'AUTH.RECOVERY_CODE_USED'
   | 'AUTH.RECOVERY_CODES_REGENERATED'
   | 'AUTH.SESSION_REVOKED'
-  | 'AUTH.ALL_OTHER_SESSIONS_REVOKED';
+  | 'AUTH.ALL_OTHER_SESSIONS_REVOKED'
+  | 'TENANT.CREATED'
+  | 'TENANT.UPDATED'
+  | 'TENANT.SUSPENDED'
+  | 'COMPANY.CREATED'
+  | 'COMPANY.UPDATED'
+  | 'MEMBERSHIP.CREATED'
+  | 'MEMBERSHIP.INVITED'
+  | 'MEMBERSHIP.ACTIVATED'
+  | 'MEMBERSHIP.SUSPENDED'
+  | 'MEMBERSHIP.REMOVED'
+  | 'ROLE.ASSIGNED'
+  | 'ROLE.REVOKED';
 
 function requestMetadata(request: FastifyRequest): { ip: string; userAgent: string; traceId: string } {
   return {
@@ -33,14 +45,15 @@ export async function writeAuditEvent(
   db: Queryable,
   action: AuditAction,
   request: FastifyRequest,
-  options: { userId?: string | null; metadata?: Record<string, unknown> } = {},
+  options: { userId?: string | null; tenantId?: string | null; metadata?: Record<string, unknown> } = {},
 ): Promise<void> {
   const { ip, userAgent, traceId } = requestMetadata(request);
   await db.query(
-    `INSERT INTO audit_events (user_id, action, metadata, ip_metadata, user_agent, trace_id)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO audit_events (user_id, tenant_id, action, metadata, ip_metadata, user_agent, trace_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       options.userId ?? null,
+      options.tenantId ?? null,
       action,
       JSON.stringify(options.metadata ?? {}),
       JSON.stringify({ ip }),

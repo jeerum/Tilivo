@@ -19,25 +19,28 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  auth-integration:
+  integration-rls:
     runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: mrjkp_test
-          POSTGRES_PASSWORD: mrjkp_test
-          POSTGRES_DB: mrjkp_accounting_test
+          POSTGRES_USER: tilivo_app
+          POSTGRES_PASSWORD: tilivo_app
+          POSTGRES_DB: tilivo_accounting_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U mrjkp_test -d mrjkp_accounting_test"
+          --health-cmd "pg_isready -U tilivo_app -d tilivo_accounting_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://mrjkp_test:mrjkp_test@127.0.0.1:5432/mrjkp_accounting_test
-      TEST_DATABASE_URL: postgres://mrjkp_test:mrjkp_test@127.0.0.1:5432/mrjkp_accounting_test
+      POSTGRES_DB: tilivo_accounting_test
+      DATABASE_URL: postgres://tilivo_runtime:tilivo_runtime@127.0.0.1:5432/tilivo_accounting_test
+      MIGRATION_DATABASE_URL: postgres://tilivo_app:tilivo_app@127.0.0.1:5432/tilivo_accounting_test
+      TEST_DATABASE_URL: postgres://tilivo_runtime:tilivo_runtime@127.0.0.1:5432/tilivo_accounting_test
+      TILIVO_RUNTIME_PASSWORD: tilivo_runtime
       TOTP_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       NODE_ENV: test
       LOG_LEVEL: silent
@@ -50,5 +53,9 @@ jobs:
           node-version: 22
       - run: npm --prefix apps/api ci
       - run: npm --prefix apps/api run build
+      - run: >-
+          PGPASSWORD=tilivo_app psql -h 127.0.0.1 -U tilivo_app -d tilivo_accounting_test
+          -c "CREATE ROLE tilivo_runtime LOGIN PASSWORD 'tilivo_runtime'"
+      - run: PGPASSWORD=tilivo_app psql -h 127.0.0.1 -U tilivo_app -d postgres -c "GRANT CONNECT ON DATABASE tilivo_accounting_test TO tilivo_runtime"
       - run: node apps/api/dist/migrate.js up
       - run: npm --prefix apps/api test
