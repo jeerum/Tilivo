@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MRJKP Accounting – project-specific PostgreSQL backup.
+# Tilivo – project-specific PostgreSQL backup.
 # Reads credentials from the project .env; never writes secrets to the log.
 set -euo pipefail
 
@@ -20,7 +20,7 @@ BACKUP_DIR="${BACKUP_DIR:-$PROJECT_DIR/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 LOG_FILE="$BACKUP_DIR/backup.log"
 STAMP="$(date +%Y%m%d_%H%M%S)"
-OUT_FILE="$BACKUP_DIR/mrjkp_accounting_${STAMP}.sql.gz"
+OUT_FILE="$BACKUP_DIR/tilivo_accounting_${STAMP}.sql.gz"
 TMP_FILE="$OUT_FILE.tmp"
 
 mkdir -p "$BACKUP_DIR"
@@ -44,7 +44,7 @@ if docker compose exec -T accounting-db \
   SIZE="$(stat -c%s "$OUT_FILE")"
   DURATION="$((END_TS - START_TS))"
   log "backup ok file=$(basename "$OUT_FILE") size=${SIZE} duration=${DURATION}s"
-  find "$BACKUP_DIR" -maxdepth 1 -name 'mrjkp_accounting_*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
+  find "$BACKUP_DIR" -maxdepth 1 -name 'tilivo_accounting_*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
   log "retention ok days=${RETENTION_DAYS}"
   exit 0
 else
@@ -52,4 +52,3 @@ else
   log "backup FAILED"
   exit 1
 fi
-

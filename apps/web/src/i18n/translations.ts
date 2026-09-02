@@ -3,7 +3,7 @@ export type Language = (typeof languages)[number];
 
 export const translations = {
   et: {
-    appName: 'MRJKP Accounting',
+    appName: 'Tilivo',
     tagline: 'Raamatupidamise SaaS',
     status: 'Süsteemi olek',
     checking: 'Kontrollin...',
@@ -75,7 +75,7 @@ export const translations = {
     loading: 'Laen...',
   },
   en: {
-    appName: 'MRJKP Accounting',
+    appName: 'Tilivo',
     tagline: 'Accounting SaaS',
     status: 'System status',
     checking: 'Checking...',

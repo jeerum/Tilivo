@@ -144,7 +144,7 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
     expect(beforeVerification.status).toBe(200);
     expect(beforeVerification.body.user.email_verified).toBe(true);
     expect(beforeVerification.body.user.password_hash).toBeUndefined();
-    expect(beforeVerification.cookie).toContain('mrjkp_session=');
+    expect(beforeVerification.cookie).toContain('tilivo_session=');
   });
 
   it('does not allow login before verification and hides account enumeration', async () => {
@@ -371,7 +371,7 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
       '10.0.0.62',
     );
     expect(totpLogin.status).toBe(200);
-    expect(totpLogin.cookie).toContain('mrjkp_session=');
+    expect(totpLogin.cookie).toContain('tilivo_session=');
 
     const logoutSecond = await inject({
       method: 'POST',

@@ -1,5 +1,5 @@
 {
-  "name": "mrjkp-accounting",
+  "name": "tilivo",
   "version": "0.1.0",
   "private": true,
   "description": "Raamatupidamise SaaS - modular monolith, v0.1 infrastructure",
@@ -19,4 +19,3 @@
     "concurrently": "^9.1.2"
   }
 }
-

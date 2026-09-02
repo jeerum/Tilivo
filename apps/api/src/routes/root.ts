@@ -25,7 +25,7 @@ export async function rootRoutes(app: FastifyInstance, options: RootRouteOptions
       },
     },
     async () => ({
-      service: 'mrjkp-accounting-api',
+      service: 'tilivo-api',
       version: options.version,
       api: '/api/v1',
     }),
@@ -57,4 +57,3 @@ export async function rootRoutes(app: FastifyInstance, options: RootRouteOptions
     }),
   );
 }
-

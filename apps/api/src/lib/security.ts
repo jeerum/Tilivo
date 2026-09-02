@@ -139,7 +139,7 @@ export function verifyTotp(secret: string, code: string, options: TotpOptions = 
   return false;
 }
 
-export function otpauthUri(secret: string, accountName: string, issuer = 'MRJKP Accounting'): string {
+export function otpauthUri(secret: string, accountName: string, issuer = 'Tilivo'): string {
   const label = encodeURIComponent(`${issuer}:${accountName}`);
   const params = new URLSearchParams({
     secret,

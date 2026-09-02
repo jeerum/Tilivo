@@ -1,4 +1,4 @@
-# ARHITEKTUUR – MRJKP Accounting
+# ARHITEKTUUR – Tilivo
 
 Selle dokumendi aluseks on `raamatupidamise_saas_ARCHITECTURE_v2.md` (source of truth toote ja arhitektuuri
 jaoks). Käesolev dokument hoiab kokku praeguse v0.2 arhitektuuri ja ei kirjuta algset plaani üle.
@@ -64,7 +64,7 @@ Backend API (Fastify) – /api/v1, /api/v1/auth
 
 ## Deploy põhimõtted
 
-- Isoleeritud Docker Compose projekt (`mrjkp`), oma network/volume/DB/kasutaja/pordid.
+- Isoleeritud Docker Compose projekt (`tilivo`), oma network/volume/DB/kasutaja/pordid.
 - Olemasolevaid serveriteenuseid ei peatata ega muudeta.
 - Automaatne DB backup systemd timer'iga (`deploy/systemd`), retention 14 päeva.
 - Detailid: [`DEPLOYMENT.md`](DEPLOYMENT.md); otsused: [`docs/decisions`](docs/decisions).

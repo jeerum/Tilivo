@@ -16,13 +16,13 @@ set +a
 docker compose config -q
 
 echo "==> build + up db"
-docker compose up -d --build accounting-db
+docker compose up -d --build tilivo-db
 
 echo "==> build + up api and web"
-docker compose up -d --build accounting-api accounting-web
+docker compose up -d --build tilivo-api tilivo-web
 
 echo "==> migrations"
-docker compose run --rm --no-deps accounting-api node dist/migrate.js up
+docker compose run --rm --no-deps tilivo-api node dist/migrate.js up
 
 echo "==> smoke tests"
 for _ in $(seq 1 30); do

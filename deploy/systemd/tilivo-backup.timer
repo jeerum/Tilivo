@@ -1,5 +1,5 @@
 [Unit]
-Description=Run MRJKP Accounting backup daily
+Description=Run Tilivo backup daily
 
 [Timer]
 OnCalendar=*-*-* 03:17:00
@@ -8,4 +8,3 @@ RandomizedDelaySec=300
 
 [Install]
 WantedBy=timers.target
-

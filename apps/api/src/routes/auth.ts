@@ -203,7 +203,7 @@ async function sendVerificationEmail(
   await emailProvider.send({
     to: email,
     subject: 'Verify your email',
-    text: `Welcome to MRJKP Accounting.\n\nVerify your email by opening this link:\n${link}\n\nThis link expires in 24 hours.`,
+    text: `Welcome to Tilivo.\n\nVerify your email by opening this link:\n${link}\n\nThis link expires in 24 hours.`,
   });
 }
 

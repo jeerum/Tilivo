@@ -63,8 +63,8 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
     await app.register(swagger, {
       openapi: {
         info: {
-          title: 'MRJKP Accounting API',
-          description: 'Modular monolith accounting SaaS backend. v0.2 Identity.',
+          title: 'Tilivo API',
+          description: 'Tilivo modular monolith backend. v0.2 Identity.',
           version: config.API_VERSION,
         },
         servers: [{ url: '/' }],

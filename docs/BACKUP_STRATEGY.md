@@ -1,51 +1,40 @@
-# Backup-strateegia
+# Backup-strateegia - Tilivo
 
-## Eesmärk
+## Eesmärk ja siht
 
-Tagada andmete taastatavus ja dokumenteerida RPO/RTO siht.
-
-## Siht
-
-- RPO <= 1 tund (kuni infrastruktuur seda võimaldab)
-- RTO <= 4 tundi
+- RPO <= 1 tund, RTO <= 4 tundi (kuni infrastruktuur võimaldab).
+- Backup ei ole "working", kuni seda pole taastatud.
 
 ## Praegu rakendatud
 
-- PostgreSQL volume: eraldi nimeline Docker volume `mrjkp-accounting-db-data`.
-- Automaatne backup: systemd oneshot `mrjkp-accounting-backup.service` + timer iga päev 03:17
-  (`deploy/systemd/`), skript `deploy/backup.sh`.
-- Backup-kaust: `/opt/mrjkp-accounting/backups` (mode 700), backup-failid 600, logi `backup.log`
-  ilma paroolideta.
-- Retention: 14 päeva (konfigureeritav `RETENTION_DAYS`).
-- Restore-test: tehtud PASS – production backup taastati ajutisse `mrjkp_accounting_restore_test` DB-sse,
-  kontrolliti tabelid ja pgcrypto, seejärel DB eemaldati.
+- Automaatne backup: systemd `tilivo-backup.service` + `tilivo-backup.timer` (iga päev 03:17),
+  skript `deploy/backup.sh`.
+- Backup-kaust: `/opt/tilivo/backups` (mode 700), failid 600, logi ilma paroolideta.
+- Retention: 14 päeva.
+- Restore-test: PASS – backup taastati ajutisse test-DB-sse, kontrolliti tabelid ja pgcrypto,
+  seejärel eemaldati.
 
-## Manuaalne käivitus ja kontroll
+## Ajaloolised backupid
+
+- Pre-rename failid `mrjkp_accounting_*.sql.gz` on ajalugu ja neid ei nimetata ümber.
+- Post-rename failid kasutavad nime `tilivo_accounting_*.sql.gz`.
+
+## Käivitus ja kontroll
 
 ```bash
-systemctl start mrjkp-accounting-backup.service
-systemctl status mrjkp-accounting-backup.service
-tail -5 /opt/mrjkp-accounting/backups/backup.log
+systemctl start tilivo-backup.service
+systemctl status tilivo-backup.service
+tail -5 /opt/tilivo/backups/backup.log
 ```
 
 ## Restore
 
 ```bash
-gunzip < backups/mrjkp_accounting_XXXX.sql.gz \
-  | docker compose exec -T accounting-db psql -U mrjkp_accounting_app -d mrjkp_accounting
-```
-
-Restore-test protseduur (ei puuduta production DB-d):
-
-```bash
-CREATE DATABASE mrjkp_accounting_restore_test OWNER mrjkp_accounting_app;
-gunzip < backup.sql.gz | psql ... -d mrjkp_accounting_restore_test
-# integrity check
-DROP DATABASE mrjkp_accounting_restore_test;
+gunzip < backups/tilivo_accounting_XXXX.sql.gz \
+  | docker compose exec -T tilivo-db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
 ## Põhimõtted
 
 - Production skeemi ei muudeta käsitsi ilma migratsioonita.
-- Backup ei ole "working", kuni seda pole taastatud; restore-test kuulub release-protsessi.
-- Saladused (`.env`, `server.md`) ei kuulu backup-artefaktidesse, mis repo'sse läheksid.
+- Saladused ei kuulu repo'sse ega backup-logidesse.

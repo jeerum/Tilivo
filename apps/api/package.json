@@ -1,8 +1,8 @@
 {
-  "name": "@mrjkp/accounting-api",
+  "name": "@tilivo/api",
   "version": "0.1.0",
   "private": true,
-  "description": "MRJKP Accounting API - modular monolith backend",
+  "description": "Tilivo API - modular monolith backend",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"

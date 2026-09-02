@@ -2,6 +2,9 @@
 
 Kuupäev: 2026-09-02 · Staatus: lukustatud
 
+> Ajalooline snapshot v0.1 ajast (projekt oli siis MRJKP). Aktuaalsed nimed on Tilivo;
+> dokument on säilitatud otsuste ajalooks.
+
 ## Ulatus
 
 v0.1 on infrastruktuurivundament, mitte ärimoodulid. Valmis on:
@@ -58,4 +61,3 @@ Iga response sisaldab päist `x-trace-id`. Vea korral sisaldab body `error.code`
 - startup-test PASS
 - serveri smoke-test: API health 200, web 200, web->API proxy 200
 - olemasolevad teenused enne/pärast muutumatud
-

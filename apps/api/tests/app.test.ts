@@ -98,7 +98,7 @@ describe('route and error handling', () => {
     const api = await app.inject({ method: 'GET', url: '/api/v1' });
 
     expect(root.statusCode).toBe(200);
-    expect(root.json().service).toBe('mrjkp-accounting-api');
+    expect(root.json().service).toBe('tilivo-api');
     expect(api.statusCode).toBe(200);
     expect(api.json().api).toBe('v1');
   });

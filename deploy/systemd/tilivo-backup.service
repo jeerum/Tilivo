@@ -1,11 +1,11 @@
 [Unit]
-Description=MRJKP Accounting PostgreSQL backup (one-shot)
+Description=Tilivo PostgreSQL backup (one-shot)
 After=docker.service network-online.target
 Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/mrjkp-accounting/deploy/backup.sh
+ExecStart=/opt/tilivo/deploy/backup.sh
 Nice=10
 IOSchedulingClass=idle
 

@@ -1,4 +1,4 @@
-# MRJKP Accounting
+# Tilivo
 
 Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on **v0.2 Identity** vastavalt
 `raamatupidamise_saas_ARCHITECTURE_v2.md` plaanile. Ärireeglid, arveldamine, pank jne tulevad hilisemates
@@ -25,7 +25,7 @@ deploy/
 - Migratsioonid: node-pg-migrate (source control'is)
 - Konfiguratsioon: environment + Zod validaator
 - Frontend: React 19, TypeScript, Vite 6
-- Deploy: isoleeritud Docker Compose projekt (`mrjkp`)
+- Deploy: isoleeritud Docker Compose projekt (`tilivo`)
 - Logid: pino struktureeritud JSON; iga request seotud `trace_id`-ga
 - Paroolid: Argon2id; tokenid DB-s hash'itult; TOTP secret AES-256-GCM krüpteeritult
 

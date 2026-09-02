@@ -11,7 +11,7 @@ interface AuthValue {
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
-const CSRF_COOKIE = 'mrjkp_csrf';
+const CSRF_COOKIE = 'tilivo_csrf';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<PublicUser | null>(null);
@@ -60,4 +60,3 @@ export function useAuth(): AuthValue {
   if (!context) throw new Error('useAuth must be used inside AuthProvider');
   return context;
 }
-

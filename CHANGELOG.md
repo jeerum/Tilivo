@@ -1,5 +1,15 @@
 # Changelog
 
+## [Rename 2026-09-02] - MRJKP -> Tilivo
+
+- Toote branding, HTML/UI, README/docs: Tilivo.
+- Package nimed: `tilivo`, `@tilivo/api`, `@tilivo/web`.
+- Cookie nimed: `tilivo_session`, `tilivo_csrf`.
+- Docker Compose projekt ja containerid: `tilivo`, `tilivo-db/api/web`.
+- Serveri kaust: `/opt/tilivo`; systemd: `tilivo-backup.*`.
+- DB: `tilivo_accounting`, kasutaja `tilivo_app` (sama data, sama TOTP key).
+- Füüsiline volume legacy nimega säilitatud; vanad MRJKP backupid jäid ajalooks.
+
 ## [0.2.0] - 2026-09-02
 
 ### Added

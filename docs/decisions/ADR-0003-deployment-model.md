@@ -2,6 +2,11 @@
 
 Kuupäev: 2026-09-02
 
+> Ajakohastatud 2026-09-02 (rename): projekt on nüüd `tilivo`, containerid `tilivo-db/api/web`,
+> serveri kaust `/opt/tilivo`, DB `tilivo_accounting`, kasutaja `tilivo_app`. Volume füüsiline nimi
+> `mrjkp-accounting-db-data` on teadlikult säilitatud andmete turvalisuseks. Allolev tekst on algse
+> otsuse dokumentatsioon.
+
 ## Probleem
 
 Serveris töötab juba mitu teenust (nginx, wordgame Docker Compose, multipower, baltik, lahedal, mariadb,
@@ -31,4 +36,3 @@ rikkumata.
 
 - Avalikuks kasutuseks on vaja eraldi nginx-isoleeritud vhosti + DNS-i (järgmine samm, kasutaja otsus).
 - DB-parool ja .env elavad ainult serveris; repo sisaldab `.env.example`.
-

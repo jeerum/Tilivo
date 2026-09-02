@@ -1,8 +1,8 @@
 {
-  "name": "@mrjkp/accounting-web",
+  "name": "@tilivo/web",
   "version": "0.1.0",
   "private": true,
-  "description": "MRJKP Accounting web frontend - v0.1 skeleton",
+  "description": "Tilivo web frontend",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"

@@ -1,12 +1,10 @@
-# EXAMPLE – aktiveeri alles pärast DNS-i lisamist ja sertifikaadi hankimist.
-# Salvesta isoleeritud failina /etc/nginx/sites-available/<domain> ja tee
-# backup olemasolevast konfigist enne muutmist. Kontrolli: nginx -t
+# EXAMPLE - aktiveeri alles pärast DNS-i lisamist ja sertifikaadi hankimist.
+# Isoleeritud nginx site-fail Tilivo jaoks; enne muutmist tee backup ja nginx -t.
 
-# HTTP -> HTTPS (Let's Encrypt väljakutse)
 server {
     listen 80;
     listen [::]:80;
-    server_name accounting.EXAMPLE.COM;
+    server_name tilivo.EXAMPLE.COM;
 
     location /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
@@ -21,10 +19,10 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name accounting.EXAMPLE.COM;
+    server_name tilivo.EXAMPLE.COM;
 
-    ssl_certificate     /etc/letsencrypt/live/accounting.EXAMPLE.COM/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/accounting.EXAMPLE.COM/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/tilivo.EXAMPLE.COM/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tilivo.EXAMPLE.COM/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     client_max_body_size 10m;
@@ -43,4 +41,3 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-

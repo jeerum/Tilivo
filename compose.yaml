@@ -1,17 +1,18 @@
-name: mrjkp
+name: tilivo
 
 services:
-  accounting-db:
+  tilivo-db:
     image: postgres:17-alpine
+    container_name: tilivo-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-mrjkp_accounting}
-      POSTGRES_USER: ${POSTGRES_USER:-mrjkp_accounting_app}
+      POSTGRES_DB: ${POSTGRES_DB:-tilivo_accounting}
+      POSTGRES_USER: ${POSTGRES_USER:-tilivo_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
-      - mrjkp-accounting-db-data:/var/lib/postgresql/data
+      - tilivo-db-data:/var/lib/postgresql/data
     networks:
-      - mrjkp-accounting
+      - tilivo
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -19,16 +20,17 @@ services:
       retries: 20
       start_period: 10s
 
-  accounting-api:
+  tilivo-api:
     build:
       context: ./apps/api
       target: prod
+    container_name: tilivo-api
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       HOST: 0.0.0.0
       PORT: 3000
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@accounting-db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       EXPOSE_DOCS: ${EXPOSE_DOCS:-false}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
@@ -40,10 +42,10 @@ services:
     ports:
       - "127.0.0.1:${API_HOST_PORT:-3100}:3000"
     depends_on:
-      accounting-db:
+      tilivo-db:
         condition: service_healthy
     networks:
-      - mrjkp-accounting
+      - tilivo
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -51,18 +53,19 @@ services:
       retries: 10
       start_period: 10s
 
-  accounting-web:
+  tilivo-web:
     build:
       context: ./apps/web
       target: prod
+    container_name: tilivo-web
     restart: unless-stopped
     depends_on:
-      accounting-api:
+      tilivo-api:
         condition: service_healthy
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-3101}:80"
     networks:
-      - mrjkp-accounting
+      - tilivo
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 10s
@@ -70,15 +73,15 @@ services:
       retries: 10
       start_period: 5s
 
-  accounting-test:
+  tilivo-test:
     profiles: ["test"]
     build:
       context: ./apps/api
       target: test
     environment:
       NODE_ENV: test
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@accounting-db:5432/mrjkp_accounting_test
-      TEST_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@accounting-db:5432/mrjkp_accounting_test
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
+      TEST_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
       LOG_LEVEL: silent
       EMAIL_DRIVER: dev
       EMAIL_DEV_OUTBOX: "true"
@@ -86,15 +89,17 @@ services:
       COOKIE_SECURE: "false"
     command: ["sh", "-c", "node dist/migrate.js up && npm test"]
     depends_on:
-      accounting-db:
+      tilivo-db:
         condition: service_healthy
     networks:
-      - mrjkp-accounting
+      - tilivo
 
+# The physical volume keeps its legacy name so existing production data is
+# preserved; new deployments reference it under the logical name tilivo-db-data.
 volumes:
-  mrjkp-accounting-db-data:
+  tilivo-db-data:
     name: mrjkp-accounting-db-data
 
 networks:
-  mrjkp-accounting:
-    name: mrjkp-accounting
+  tilivo:
+    name: tilivo

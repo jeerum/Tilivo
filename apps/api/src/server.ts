@@ -41,7 +41,7 @@ async function main(): Promise<void> {
         environment: config.NODE_ENV,
         docs: config.EXPOSE_DOCS ? '/docs' : 'disabled',
       },
-      'MRJKP accounting API listening',
+      'Tilivo API listening',
     );
   } catch (error) {
     app.log.fatal({ err: error, action: 'listen_failed' }, 'failed to start server');
@@ -51,4 +51,3 @@ async function main(): Promise<void> {
 }
 
 void main();
-
