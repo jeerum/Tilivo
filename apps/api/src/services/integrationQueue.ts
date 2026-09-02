@@ -1,4 +1,4 @@
-import type { Db } from '../db/pool';
+import type { Db, DbClient } from '../db/pool';
 import { AppError, ErrorCodes } from '../lib/errors';
 import { withTenantTransaction } from './tenantService';
 
@@ -12,6 +12,29 @@ export interface OutboxEvent {
   attempt_count: number;
 }
 
+export async function appendOutboxInTransaction(
+  client: DbClient,
+  tenantId: string,
+  input: {
+    eventType: string;
+    aggregateType: string;
+    aggregateId: string;
+    payload?: Record<string, unknown>;
+  },
+): Promise<string> {
+  const result = await client.query(
+    'SELECT public.tilivo_outbox_append($1, $2, $3, $4, $5) AS id',
+    [
+      tenantId,
+      input.eventType,
+      input.aggregateType,
+      input.aggregateId,
+      JSON.stringify(input.payload ?? {}),
+    ],
+  );
+  return String(result.rows[0]!.id);
+}
+
 export async function appendOutbox(
   pool: Db,
   tenantId: string,
@@ -22,19 +45,9 @@ export async function appendOutbox(
     payload?: Record<string, unknown>;
   },
 ): Promise<string> {
-  return withTenantTransaction(pool, tenantId, async (client) => {
-    const result = await client.query(
-      'SELECT public.tilivo_outbox_append($1, $2, $3, $4, $5) AS id',
-      [
-        tenantId,
-        input.eventType,
-        input.aggregateType,
-        input.aggregateId,
-        JSON.stringify(input.payload ?? {}),
-      ],
-    );
-    return String(result.rows[0]!.id);
-  });
+  return withTenantTransaction(pool, tenantId, (client) =>
+    appendOutboxInTransaction(client, tenantId, input),
+  );
 }
 
 export async function claimOutbox(pool: Db, limit = 10): Promise<OutboxEvent[]> {

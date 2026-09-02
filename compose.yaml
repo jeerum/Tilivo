@@ -116,6 +116,9 @@ services:
       DATABASE_URL: postgres://tilivo_worker:${TILIVO_WORKER_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
       LOG_LEVEL: info
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
+      DOCUMENT_STORAGE_DIR: /app/storage/documents
+    volumes:
+      - tilivo-document-storage:/app/storage
     depends_on:
       tilivo-db:
         condition: service_healthy

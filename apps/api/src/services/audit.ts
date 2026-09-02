@@ -44,7 +44,24 @@ export type AuditAction =
   | 'PERIOD.CLOSED'
   | 'PERIOD.REOPENED'
   | 'TAX_CODE.CREATED'
-  | 'FX_RATE.CREATED';
+  | 'FX_RATE.CREATED'
+  | 'CUSTOMER.CREATED'
+  | 'CUSTOMER.UPDATED'
+  | 'CUSTOMER.DEACTIVATED'
+  | 'CUSTOMER.ACTIVATED'
+  | 'SALES_INVOICE.DRAFT_CREATED'
+  | 'SALES_INVOICE.UPDATED'
+  | 'SALES_INVOICE.ISSUED'
+  | 'SALES_INVOICE.CREDIT_CREATED'
+  | 'SALES_INVOICE.CREDIT_ISSUED'
+  | 'SALES_INVOICE.DRAFT_CANCELLED'
+  | 'SALES_INVOICE.PDF_REQUESTED'
+  | 'SALES_INVOICE.PDF_RETRY_REQUESTED'
+  | 'SALES_INVOICE.PDF_READY'
+  | 'SALES_INVOICE.PDF_FAILED'
+  | 'SALES_SETTINGS.UPDATED'
+  | 'SALES_SERIES.CREATED'
+  | 'SALES_SERIES.UPDATED';
 
 function requestMetadata(request: FastifyRequest): { ip: string; userAgent: string; traceId: string } {
   return {
@@ -100,6 +117,63 @@ export async function writeAuditEvent(
         ipMetadata,
         userAgent,
         traceId,
+        options.objectType ?? null,
+        options.objectId ?? null,
+        previousHash,
+        eventHash,
+      ],
+    );
+  });
+}
+
+/**
+ * Audit writer for background workers that have no HTTP request context.
+ * Uses the same serialised hash-chain append as request-scoped events.
+ */
+export async function writeAuditEventStandalone(
+  db: Db,
+  action: AuditAction,
+  options: {
+    userId?: string | null;
+    tenantId?: string | null;
+    objectType?: string | null;
+    objectId?: string | null;
+    metadata?: Record<string, unknown>;
+  } = {},
+): Promise<void> {
+  await withSerializedAuditWrite(db, async (client) => {
+    const last = await client.query(
+      'SELECT event_hash FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 1',
+    );
+    const previousHash = last.rows[0]?.event_hash ? String(last.rows[0].event_hash) : null;
+    const metadata = JSON.stringify(options.metadata ?? {});
+    const ipMetadata = JSON.stringify({});
+    const canonical = JSON.stringify([
+      options.tenantId ?? null,
+      options.userId ?? null,
+      action,
+      options.objectType ?? null,
+      options.objectId ?? null,
+      metadata,
+      ipMetadata,
+      '',
+      '',
+      previousHash,
+    ]);
+    const eventHash = crypto.createHash('sha256').update(canonical).digest('hex');
+    await client.query(
+      `INSERT INTO audit_events
+        (user_id, tenant_id, action, metadata, ip_metadata, user_agent, trace_id,
+         object_type, object_id, previous_hash, event_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        options.userId ?? null,
+        options.tenantId ?? null,
+        action,
+        metadata,
+        ipMetadata,
+        '',
+        '',
         options.objectType ?? null,
         options.objectId ?? null,
         previousHash,

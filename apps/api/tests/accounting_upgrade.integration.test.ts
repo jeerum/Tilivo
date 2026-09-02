@@ -158,11 +158,12 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     );
     expect(oldTables.rows[0]!.count).toBe(0);
 
-    // Apply the v0.5 accounting migrations (core + hardening).
+    // Apply all remaining release migrations (v0.5 accounting + v0.6 sales).
     await runMigrations(withDatabase(adminUrl!, dbName));
     const after = await adminDb.query('SELECT count(*)::int AS count FROM pgmigrations');
-    // v0.5 release migrations: accounting core, accounting hardening, tax uniqueness.
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 3);
+    // Release migrations after v0.4: accounting core, accounting hardening,
+    // tax uniqueness and the v0.6 sales core migration.
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 4);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(
@@ -189,19 +190,28 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = 'public' AND table_name IN
          ('accounts','fiscal_years','accounting_periods','currencies','tax_codes','fx_rates',
-          'journal_sequences','journal_entries','journal_lines','journal_reversals')`,
+          'journal_sequences','journal_entries','journal_lines','journal_reversals',
+          'business_parties','invoice_number_series','sales_settings','sales_invoices',
+          'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs')`,
     );
     const names = (tables.rows as Array<{ table_name: string }>).map((r) => r.table_name).sort();
     expect(names).toEqual([
       'accounting_periods',
       'accounts',
+      'business_parties',
       'currencies',
       'fiscal_years',
       'fx_rates',
+      'invoice_number_series',
       'journal_entries',
       'journal_lines',
       'journal_reversals',
       'journal_sequences',
+      'sales_invoice_credit_links',
+      'sales_invoice_lines',
+      'sales_invoice_pdfs',
+      'sales_invoices',
+      'sales_settings',
       'tax_codes',
     ]);
 
@@ -211,26 +221,30 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     const permissions = await adminDb.query(
       `SELECT key FROM permissions
        WHERE key IN ('accounting.read','journal.create','journal.post','journal.reverse',
-                     'period.manage','period.reopen','chart.manage')
+                     'period.manage','period.reopen','chart.manage',
+                     'sales.read','sales.customer.manage','invoice.create','invoice.issue',
+                     'invoice.credit','invoice.pdf.retry','sales.settings.manage')
        ORDER BY key`,
     );
-    expect(permissions.rows).toHaveLength(7);
+    expect(permissions.rows).toHaveLength(14);
     const grants = await adminDb.query(
       `SELECT r.name, count(*)::int AS grant_count
        FROM role_permissions rp
        JOIN roles r ON r.id = rp.role_id
        JOIN permissions p ON p.id = rp.permission_id
        WHERE p.key IN ('accounting.read','journal.create','journal.post','journal.reverse',
-                       'period.manage','period.reopen','chart.manage')
+                       'period.manage','period.reopen','chart.manage',
+                       'sales.read','sales.customer.manage','invoice.create','invoice.issue',
+                       'invoice.credit','invoice.pdf.retry','sales.settings.manage')
        GROUP BY r.name
        ORDER BY r.name`,
     );
     const grantMap = new Map<string, number>();
     for (const row of grants.rows) grantMap.set(String(row.name), Number(row.grant_count));
-    expect(grantMap.get('Owner')).toBe(7);
-    expect(grantMap.get('Admin')).toBe(7);
-    expect(grantMap.get('Accountant')).toBe(3);
-    expect(grantMap.get('Viewer')).toBeUndefined();
+    expect(grantMap.get('Owner')).toBe(14);
+    expect(grantMap.get('Admin')).toBe(14);
+    expect(grantMap.get('Accountant')).toBe(9);
+    expect(grantMap.get('Viewer')).toBe(1);
 
     // RLS is active and forced on accounting tables.
     const rls = await adminDb.query(
@@ -239,10 +253,12 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
        JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = 'public' AND c.relname IN
          ('accounts','fiscal_years','accounting_periods','tax_codes','fx_rates',
-          'journal_entries','journal_lines','journal_reversals')
+          'journal_entries','journal_lines','journal_reversals',
+          'business_parties','invoice_number_series','sales_settings','sales_invoices',
+          'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs')
        ORDER BY c.relname`,
     );
-    expect(rls.rows).toHaveLength(8);
+    expect(rls.rows).toHaveLength(15);
     for (const row of rls.rows) {
       expect(Boolean(row.relrowsecurity)).toBe(true);
       expect(Boolean(row.relforcerowsecurity)).toBe(true);
@@ -266,7 +282,9 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     const triggers = await adminDb.query(
       `SELECT tgname FROM pg_trigger
        WHERE tgname IN ('tilivo_journal_entries_immutable','tilivo_journal_lines_immutable',
-                        'tilivo_journal_lines_insert_immutable','tilivo_journal_reversal_validate')
+                        'tilivo_journal_lines_insert_immutable','tilivo_journal_reversal_validate',
+                        'tilivo_sales_invoices_immutable','tilivo_sales_invoice_lines_immutable',
+                        'tilivo_sales_credit_link_validate','tilivo_sales_invoice_pdfs_immutable')
        ORDER BY tgname`,
     );
     const triggerNames = (triggers.rows as Array<{ tgname: string }>).map((r) => r.tgname);
@@ -274,6 +292,19 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     expect(triggerNames).toContain('tilivo_journal_lines_immutable');
     expect(triggerNames).toContain('tilivo_journal_lines_insert_immutable');
     expect(triggerNames).toContain('tilivo_journal_reversal_validate');
+    expect(triggerNames).toContain('tilivo_sales_invoices_immutable');
+    expect(triggerNames).toContain('tilivo_sales_invoice_lines_immutable');
+    expect(triggerNames).toContain('tilivo_sales_credit_link_validate');
+    expect(triggerNames).toContain('tilivo_sales_invoice_pdfs_immutable');
+
+    // v0.6 upgrade seeded one default series and settings for the old tenant.
+    const salesSeed = await adminDb.query(
+      `SELECT
+         (SELECT count(*)::int FROM invoice_number_series WHERE tenant_id = '00000000-0000-4000-8000-000000000001') AS series,
+         (SELECT count(*)::int FROM sales_settings WHERE tenant_id = '00000000-0000-4000-8000-000000000001') AS settings`,
+    );
+    expect(salesSeed.rows[0]!.series).toBeGreaterThanOrEqual(1);
+    expect(salesSeed.rows[0]!.settings).toBe(1);
 
     // RLS visibility works for the runtime role on accounting data.
     await adminDb.query(

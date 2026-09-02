@@ -92,6 +92,7 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'journal.create',
       'journal.post',
       'sales.read',
+      'sales.customer.manage',
       'invoice.create',
       'invoice.issue',
       'invoice.credit',

@@ -410,6 +410,38 @@ exports.up = (pgm) => {
   `);
 
   // ---------------------------------------------------------------------------
+  // Default sales settings for existing tenants. Existing tenants keep their
+  // data; each gets one active default invoice number series (prefix-less,
+  // year-prefixed numbers such as 2026-000001). Accounting mappings are left
+  // empty and must be configured before the first invoice can be issued.
+  // ---------------------------------------------------------------------------
+  pgm.sql(`
+    INSERT INTO invoice_number_series (tenant_id, name, prefix)
+    SELECT t.id, 'Default', ''
+    FROM tenants t
+    WHERE NOT EXISTS (
+      SELECT 1 FROM invoice_number_series s WHERE s.tenant_id = t.id
+    )
+  `);
+  pgm.sql(`
+    INSERT INTO sales_settings
+      (tenant_id, company_id, default_invoice_series_id, default_payment_terms_days,
+       default_language, default_currency, payment_reference_type)
+    SELECT t.id,
+           (SELECT c.id FROM companies c
+            WHERE c.tenant_id = t.id AND c.status = 'ACTIVE'
+            ORDER BY c.created_at LIMIT 1),
+           (SELECT s.id FROM invoice_number_series s
+            WHERE s.tenant_id = t.id
+            ORDER BY s.created_at LIMIT 1),
+           14, 'fi', 'EUR', 'FI_DOMESTIC'
+    FROM tenants t
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sales_settings ss WHERE ss.tenant_id = t.id
+    )
+  `);
+
+  // ---------------------------------------------------------------------------
   // RLS + grants
   // ---------------------------------------------------------------------------
   const tenantTables = [
@@ -441,12 +473,14 @@ exports.up = (pgm) => {
   // Worker renders and stores PDFs; it runs with an explicit per-event tenant
   // context (app.tenant_id) so tenant RLS applies to it as well.
   pgm.sql('GRANT SELECT ON sales_invoices TO tilivo_worker');
+  pgm.sql('GRANT SELECT ON sales_invoice_lines TO tilivo_worker');
   pgm.sql('GRANT SELECT, INSERT, UPDATE ON sales_invoice_pdfs TO tilivo_worker');
   pgm.sql('GRANT SELECT, INSERT, UPDATE ON documents TO tilivo_worker');
   pgm.sql('GRANT SELECT, INSERT ON document_versions TO tilivo_worker');
   pgm.sql('GRANT SELECT ON business_parties TO tilivo_worker');
   pgm.sql('GRANT SELECT ON sales_settings TO tilivo_worker');
   pgm.sql('GRANT SELECT ON companies TO tilivo_worker');
+  pgm.sql('GRANT SELECT, INSERT ON audit_events TO tilivo_worker');
 
   const newPermissions = [
     ['sales.read', 'Read sales'],
@@ -474,7 +508,8 @@ exports.up = (pgm) => {
     SELECT r.tenant_id, r.id, p.id
     FROM roles r CROSS JOIN permissions p
     WHERE r.name = 'Accountant'
-      AND p.key IN ('sales.read','invoice.create','invoice.issue','invoice.credit','invoice.pdf.retry')
+      AND p.key IN ('sales.read','sales.customer.manage','invoice.create','invoice.issue',
+                    'invoice.credit','invoice.pdf.retry')
     ON CONFLICT (role_id, permission_id) DO NOTHING
   `);
   pgm.sql(`
