@@ -11,6 +11,7 @@ import {
 import { useAuth } from './auth/AuthContext';
 import { AppShell } from './app/AppShell';
 import { DocumentsPage } from './app/DocumentsPage';
+import { SettingsPage } from './app/SettingsPage';
 
 function Protected({ children }: { children: ReactNode }) {
   const { ready, user } = useAuth();
@@ -24,7 +25,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Protected><HomePage /></Protected>} />
       <Route path="/documents" element={<Protected><DocumentsPage /></Protected>} />
-      <Route path="/settings" element={<Protected><HomePage /></Protected>} />
+      <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />

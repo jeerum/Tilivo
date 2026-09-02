@@ -1,4 +1,5 @@
 import type { Db } from '../db/pool';
+import crypto from 'node:crypto';
 import { withTenantTransaction } from './tenantService';
 
 export interface AuditEventView {
@@ -51,4 +52,40 @@ export async function listTenantAudit(
       })),
     };
   });
+}
+
+function auditCanonical(row: Record<string, unknown>, previousHash: string | null): string {
+  return JSON.stringify([
+    row.tenant_id ? String(row.tenant_id) : null,
+    row.user_id ? String(row.user_id) : null,
+    String(row.action),
+    row.object_type ? String(row.object_type) : null,
+    row.object_id ? String(row.object_id) : null,
+    String(row.metadata),
+    String(row.ip_metadata),
+    String(row.user_agent),
+    row.trace_id ? String(row.trace_id) : null,
+    previousHash,
+  ]);
+}
+
+export async function verifyAuditChain(pool: Db): Promise<{ valid: boolean; brokenAt: string | null }> {
+  const result = await pool.query(
+    `SELECT id, tenant_id, user_id, action, metadata, ip_metadata, user_agent, trace_id,
+            object_type, object_id, previous_hash, event_hash, created_at
+     FROM audit_events
+     ORDER BY created_at, id`,
+  );
+  let previousHash: string | null = null;
+  for (const row of result.rows) {
+    if ((row.previous_hash ?? null) !== previousHash) {
+      return { valid: false, brokenAt: String(row.id) };
+    }
+    const expected = crypto.createHash('sha256').update(auditCanonical(row, previousHash)).digest('hex');
+    if (expected !== row.event_hash) {
+      return { valid: false, brokenAt: String(row.id) };
+    }
+    previousHash = String(row.event_hash);
+  }
+  return { valid: true, brokenAt: null };
 }

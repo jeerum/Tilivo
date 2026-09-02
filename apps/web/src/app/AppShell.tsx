@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { NavLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
 
@@ -11,18 +12,45 @@ const navItems = [
 export function AppShell({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { t } = useI18n();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDrawerOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const nav = (
+    <nav aria-label="Main navigation">
+      {navItems.map((item) => (
+        <NavLink key={item.key} to={item.href} onClick={() => setDrawerOpen(false)}>
+          {t(item.labelKey)}
+        </NavLink>
+      ))}
+    </nav>
+  );
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">{t('appName')}</div>
-        <nav aria-label="Main navigation">
-          {navItems.map((item) => (
-            <a key={item.key} href={item.href}>
-              {t(item.labelKey)}
-            </a>
-          ))}
-        </nav>
-      </aside>
+      <button
+        className="hamburger"
+        aria-label="Open navigation"
+        aria-expanded={drawerOpen}
+        onClick={() => setDrawerOpen((open) => !open)}
+      >
+        ☰
+      </button>
+      <aside className="sidebar">{nav}</aside>
+      {drawerOpen && (
+        <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)}>
+          <aside className="drawer" onClick={(event) => event.stopPropagation()}>
+            <div className="brand">{t('appName')}</div>
+            {nav}
+          </aside>
+        </div>
+      )}
       <div className="app-main">
         <header className="topbar-wide">
           <span className="topbar-title">{t('appName')}</span>

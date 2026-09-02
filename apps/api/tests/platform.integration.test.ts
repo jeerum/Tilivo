@@ -8,6 +8,7 @@ import {
   processOutbox,
   receiveInboxEvent,
 } from '../src/services/integrationQueue';
+import { verifyAuditChain } from '../src/services/auditQuery';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const workerDatabaseUrl = process.env.WORKER_TEST_DATABASE_URL;
@@ -16,10 +17,95 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
   let app: FastifyInstance;
   let pool: ReturnType<typeof createPool>;
   let workerPool: ReturnType<typeof createPool>;
+  let ownerPool: ReturnType<typeof createPool> | null = null;
+  let emailCounter = 0;
+
+  function nextEmail(): string {
+    emailCounter += 1;
+    return `platform${emailCounter}@example.com`;
+  }
+
+  async function registerLogin(ip: string): Promise<{ cookie: string; csrf: string; email: string }> {
+    const email = nextEmail();
+    const register = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+      payload: { email, password: 'correct horse battery staple' },
+    });
+    expect(register.statusCode).toBe(202);
+    const mail = await pool.query(
+      'SELECT body FROM dev_email_outbox WHERE recipient_email = $1 ORDER BY created_at DESC LIMIT 1',
+      [email],
+    );
+    const token = String(mail.rows[0]!.body).match(/token=([^&\s]+)/)![1]!;
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/email/verify',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+      payload: { token: decodeURIComponent(token) },
+    });
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+      payload: { email, password: 'correct horse battery staple' },
+    });
+    const cookie = (login.cookies ?? []).map((c) => `${c.name}=${c.value}`).join('; ');
+    return { cookie, csrf: login.json().csrf_token as string, email };
+  }
+
+  async function createTenant(
+    auth: { cookie: string; csrf: string },
+    name: string,
+  ): Promise<string> {
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tenants',
+      headers: {
+        'content-type': 'application/json',
+        cookie: auth.cookie,
+        'x-csrf-token': auth.csrf,
+        'x-forwarded-for': '10.0.20.10',
+      },
+      payload: { name, company: { legal_name: name } },
+    });
+    expect(result.statusCode).toBe(201);
+    return result.json().tenant.id as string;
+  }
+
+  function pdfBody(filename: string, prefix = '%PDF-1.4 test'): Buffer {
+    const boundary = '----tilivo';
+    const head = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/pdf\r\n\r\n`,
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    return Buffer.concat([head, Buffer.from(prefix), tail]);
+  }
+
+  async function uploadPdf(
+    auth: { cookie: string; csrf: string },
+    tenantId: string,
+    filename = 'test.pdf',
+    prefix = '%PDF-1.4 test',
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: '/api/v1/documents',
+      headers: {
+        'content-type': 'multipart/form-data; boundary=----tilivo',
+        cookie: auth.cookie,
+        'x-csrf-token': auth.csrf,
+        'x-tilivo-tenant-id': tenantId,
+      },
+      payload: pdfBody(filename, prefix),
+    });
+  }
 
   beforeAll(async () => {
     pool = createPool(databaseUrl!);
     workerPool = createPool(workerDatabaseUrl!);
+    if (process.env.MIGRATION_DATABASE_URL) ownerPool = createPool(process.env.MIGRATION_DATABASE_URL);
     const config = loadConfig({
       NODE_ENV: 'test',
       DATABASE_URL: databaseUrl!,
@@ -36,6 +122,7 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
     await app.close();
     await pool.end();
     await workerPool.end();
+    await ownerPool?.end();
   });
 
   it('runtime role cannot update or delete audit events and hash chain links events', async () => {
@@ -54,6 +141,22 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
     if (rows.rows[0]) {
       expect(String(rows.rows[0]!.event_hash)).toMatch(/^[0-9a-f]{64}$/);
     }
+  });
+
+  it('audit hash chain detects tampering', async () => {
+    if (!ownerPool) return;
+    const before = await verifyAuditChain(ownerPool);
+    expect(before.valid).toBe(true);
+    const target = await ownerPool.query(
+      'SELECT id FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 1',
+    );
+    if (!target.rows[0]) return;
+    await ownerPool.query(`UPDATE audit_events SET metadata = '{"tampered":true}' WHERE id = $1`, [
+      target.rows[0].id,
+    ]);
+    const after = await verifyAuditChain(ownerPool);
+    expect(after.valid).toBe(false);
+    expect(after.brokenAt).toBeTruthy();
   });
 
   it('inbox is idempotent by provider/external id', async () => {
@@ -96,5 +199,66 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
       [outboxId],
     );
     expect(String(status.rows[0]!.status)).toBe('PROCESSED');
+  });
+
+  it('document hostile matrix: cross-tenant, signatures, traversal, immutability', async () => {
+    const ownerA = await registerLogin('10.0.20.20');
+    const ownerB = await registerLogin('10.0.20.21');
+    const tenantA = await createTenant(ownerA, 'Doc Tenant A');
+    const tenantB = await createTenant(ownerB, 'Doc Tenant B');
+
+    const upload = await uploadPdf(ownerA, tenantA, '../../evil.pdf');
+    expect(upload.statusCode).toBe(201);
+    const documentId = upload.json().document.id as string;
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/v1/documents',
+      headers: { cookie: ownerA.cookie, 'x-tilivo-tenant-id': tenantA },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().documents[0].original_filename).not.toContain('/');
+
+    const crossRead = await app.inject({
+      method: 'GET',
+      url: `/api/v1/documents/${documentId}/download`,
+      headers: { cookie: ownerB.cookie, 'x-tilivo-tenant-id': tenantB },
+    });
+    expect(crossRead.statusCode).toBe(404);
+
+    const crossConfirm = await app.inject({
+      method: 'POST',
+      url: `/api/v1/documents/${documentId}/confirm`,
+      headers: { cookie: ownerB.cookie, 'x-csrf-token': ownerB.csrf, 'x-tilivo-tenant-id': tenantB },
+    });
+    expect(crossConfirm.statusCode).toBe(404);
+
+    const badSignature = await uploadPdf(ownerA, tenantA, 'fake.pdf', 'not a pdf at all');
+    expect(badSignature.statusCode).toBe(415);
+
+    const empty = await app.inject({
+      method: 'POST',
+      url: '/api/v1/documents',
+      headers: {
+        'content-type': 'multipart/form-data; boundary=----tilivo',
+        cookie: ownerA.cookie,
+        'x-csrf-token': ownerA.csrf,
+        'x-tilivo-tenant-id': tenantA,
+      },
+      payload: Buffer.alloc(0),
+    });
+    expect(empty.statusCode).toBe(400);
+
+    const confirm = await app.inject({
+      method: 'POST',
+      url: `/api/v1/documents/${documentId}/confirm`,
+      headers: { cookie: ownerA.cookie, 'x-csrf-token': ownerA.csrf, 'x-tilivo-tenant-id': tenantA },
+    });
+    expect(confirm.statusCode).toBe(200);
+
+    await expect(
+      pool.query(`UPDATE document_versions SET original_filename = 'tampered' WHERE document_id = $1`, [
+        documentId,
+      ]),
+    ).rejects.toMatchObject({ message: expect.stringContaining('immutable') });
   });
 });

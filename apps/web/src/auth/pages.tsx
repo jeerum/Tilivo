@@ -5,6 +5,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from './AuthContext';
 import { api, type PublicUser, type SessionInfo } from './api';
 import { languages, useI18n } from '../i18n/I18nContext';
+import { parseUserAgent } from '../lib/userAgent';
 
 function ErrorNote({ error }: { error: string | null }) {
   if (!error) return null;
@@ -602,7 +603,7 @@ export function HomePage() {
           {sessions.map((session) => (
             <li key={session.id}>
               <span>
-                <strong>{session.user_agent || '—'}</strong> {session.current && `(${t('currentSession')})`}
+                <strong>{parseUserAgent(session.user_agent).label}</strong> {session.current && `(${t('currentSession')})`}
                 <br />
                 <small>
                   {t('createdAt')}: {new Date(session.created_at).toLocaleString()} · {t('expiresAt')}:{' '}

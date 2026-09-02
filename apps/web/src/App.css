@@ -273,6 +273,10 @@ dd {
   min-height: 100vh;
 }
 
+.hamburger {
+  display: none;
+}
+
 .sidebar {
   background: #ffffff;
   border-right: 1px solid #e2e6ea;
@@ -324,6 +328,29 @@ dd {
   max-width: 1280px;
 }
 
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav a {
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: #17202a;
+  text-decoration: none;
+}
+
+.settings-nav a:hover {
+  background: #f4f5f7;
+}
+
 .page-title {
   margin: 0 0 16px;
 }
@@ -342,6 +369,10 @@ dd {
   border-bottom: 1px solid #edf0f2;
 }
 
+.drawer-backdrop {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -351,10 +382,44 @@ dd {
     display: none;
   }
 
+  .hamburger {
+    display: block;
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 40;
+    font-size: 22px;
+    border: 1px solid #cfd6dc;
+    border-radius: 6px;
+    background: #ffffff;
+    width: 40px;
+    height: 40px;
+  }
+
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgb(0 0 0 / 0.3);
+    z-index: 30;
+  }
+
+  .drawer {
+    width: 260px;
+    height: 100%;
+    background: #ffffff;
+    padding: 20px 12px;
+    box-shadow: 2px 0 12px rgb(0 0 0 / 0.12);
+  }
+
   .topbar-wide {
     position: sticky;
     top: 0;
     z-index: 10;
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
   }
 }
 

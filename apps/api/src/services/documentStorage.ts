@@ -67,15 +67,26 @@ export async function uploadDocument(
   if (input.data.length > 10 * 1024 * 1024) {
     throw new AppError(ErrorCodes.documentTooLarge, 'File exceeds 10 MB limit', 413);
   }
-  const allowed = new Map([
-    ['application/pdf', 'pdf'],
-    ['image/jpeg', 'jpg'],
-    ['image/png', 'png'],
-  ]);
-  const ext = allowed.get(input.mimeType);
-  if (!ext) {
+  const signatureOk =
+    (input.mimeType === 'application/pdf' && input.data.subarray(0, 5).toString('latin1') === '%PDF-') ||
+    (input.mimeType === 'image/jpeg' &&
+      input.data[0] === 0xff &&
+      input.data[1] === 0xd8 &&
+      input.data[2] === 0xff) ||
+    (input.mimeType === 'image/png' &&
+      input.data.subarray(0, 8).toString('hex') === '89504e470d0a1a0a');
+  const ext = input.mimeType === 'application/pdf' ? 'pdf' : input.mimeType === 'image/jpeg' ? 'jpg' : input.mimeType === 'image/png' ? 'png' : null;
+  if (!ext || !signatureOk) {
     throw new AppError(ErrorCodes.documentInvalid, 'File type not allowed', 415);
   }
+  const displayName = Array.from(input.originalFilename)
+    .map((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      if (char === '/' || char === '\\' || code < 32) return '_';
+      return char;
+    })
+    .join('')
+    .slice(0, 255);
   const sha256 = createHashHex(input.data);
   const storageKey = `${tenantId}/${randomUUID()}.${ext}`;
   await storage.put(storageKey, input.data);
@@ -99,7 +110,7 @@ export async function uploadDocument(
           tenantId,
           docId,
           storageKey,
-          input.originalFilename.slice(0, 255),
+          displayName,
           input.mimeType,
           input.data.length,
           sha256,
@@ -111,7 +122,7 @@ export async function uploadDocument(
         type: String(doc.rows[0]!.type),
         status: String(doc.rows[0]!.status),
         latest_version_id: String(version.rows[0]!.id),
-        original_filename: input.originalFilename.slice(0, 255),
+        original_filename: displayName,
         mime_type: input.mimeType,
         size_bytes: String(input.data.length),
         sha256,
