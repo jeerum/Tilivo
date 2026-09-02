@@ -6,6 +6,7 @@ import { useI18n } from '../i18n/I18nContext';
 const navItems = [
   { key: 'home', labelKey: 'home', href: '/' },
   { key: 'documents', labelKey: 'documents', href: '/documents' },
+  { key: 'accounting', labelKey: 'accounting', href: '/accounting' },
   { key: 'settings', labelKey: 'settings', href: '/settings' },
 ] as const;
 

@@ -369,6 +369,68 @@ dd {
   border-bottom: 1px solid #edf0f2;
 }
 
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.tab-button {
+  padding: 8px 14px;
+  border: 1px solid #cfd6dc;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tab-button.active {
+  background: #1a5fb4;
+  border-color: #1a5fb4;
+  color: #ffffff;
+}
+
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.entry-line-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 130px 130px 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-actions {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: 6px;
+}
+
+.num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+details summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
 .drawer-backdrop {
   display: none;
 }
