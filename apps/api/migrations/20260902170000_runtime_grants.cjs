@@ -11,6 +11,7 @@ exports.up = (pgm) => {
   pgm.sql('GRANT SELECT, INSERT ON auth_attempts TO tilivo_runtime');
   pgm.sql('GRANT SELECT, INSERT ON audit_events TO tilivo_runtime');
   pgm.sql('GRANT SELECT, INSERT ON dev_email_outbox TO tilivo_runtime');
+  pgm.sql('GRANT SELECT ON permissions TO tilivo_runtime');
 };
 
 exports.down = () => {
