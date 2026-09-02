@@ -706,4 +706,237 @@ describe.skipIf(!databaseUrl)('v0.5 accounting core', () => {
       }
     }
   });
+
+  it('exposes tax code and currency APIs', async () => {
+    const auth = await setupTenant('10.0.30.70', 'Tax Codes Oy');
+
+    const currencies = await request({
+      method: 'GET',
+      url: '/api/v1/currencies',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(currencies.status).toBe(200);
+    const codes = (currencies.body.currencies as Array<{ code: string }>).map((c) => c.code);
+    expect(codes).toContain('EUR');
+    expect(codes).toContain('USD');
+
+    const create = await request({
+      method: 'POST',
+      url: '/api/v1/tax-codes',
+      body: {
+        code: 'EE_KM20',
+        name: 'Käibemaks 20%',
+        country_code: 'ee',
+        rate: 20,
+        type: 'VAT',
+        effective_from: '2026-01-01',
+      },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(create.status).toBe(201);
+    expect(create.body.tax_code.country_code).toBe('EE');
+    expect(Number(create.body.tax_code.rate)).toBe(20);
+    const taxCodeId = create.body.tax_code.id as string;
+
+    const duplicate = await request({
+      method: 'POST',
+      url: '/api/v1/tax-codes',
+      body: {
+        code: 'EE_KM20',
+        name: 'Duplicate',
+        country_code: 'EE',
+        rate: 20,
+        effective_from: '2026-01-01',
+      },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error.code).toBe(ErrorCodes.taxCodeDuplicate);
+
+    const invalid = await request({
+      method: 'POST',
+      url: '/api/v1/tax-codes',
+      body: {
+        code: 'BAD',
+        name: 'Bad rate',
+        country_code: 'EE',
+        rate: -5,
+        effective_from: '2026-01-01',
+      },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe(ErrorCodes.taxCodeInvalid);
+
+    const patch = await request({
+      method: 'PATCH',
+      url: `/api/v1/tax-codes/${taxCodeId}`,
+      body: { is_active: false, rate: 22 },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(patch.status).toBe(200);
+    expect(patch.body.tax_code.is_active).toBe(false);
+    expect(Number(patch.body.tax_code.rate)).toBe(22);
+
+    const list = await request({
+      method: 'GET',
+      url: '/api/v1/tax-codes',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(list.status).toBe(200);
+    const rows = list.body.tax_codes as Array<{ id: string; code: string }>;
+    expect(rows.some((r) => r.id === taxCodeId && r.code === 'EE_KM20')).toBe(true);
+
+    const missingPatch = await request({
+      method: 'PATCH',
+      url: '/api/v1/tax-codes/00000000-0000-4000-8000-000000000000',
+      body: { name: 'Nope' },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.70',
+    });
+    expect(missingPatch.status).toBe(404);
+    expect(missingPatch.body.error.code).toBe(ErrorCodes.taxCodeNotFound);
+  });
+
+  it('exposes FX rate APIs with conversion', async () => {
+    const auth = await setupTenant('10.0.30.80', 'Fx Rates Oy');
+
+    const create = await request({
+      method: 'POST',
+      url: '/api/v1/fx-rates',
+      body: { base_currency: 'eur', quote_currency: 'usd', rate: 1.1, rate_date: '2026-06-01' },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(create.status).toBe(201);
+    expect(create.body.fx_rate.base_currency).toBe('EUR');
+    expect(Number(create.body.fx_rate.rate)).toBe(1.1);
+    const fxRateId = create.body.fx_rate.id as string;
+
+    const duplicate = await request({
+      method: 'POST',
+      url: '/api/v1/fx-rates',
+      body: { base_currency: 'EUR', quote_currency: 'USD', rate: 1.2, rate_date: '2026-06-01' },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error.code).toBe(ErrorCodes.fxRateDuplicate);
+
+    const unknownCurrency = await request({
+      method: 'POST',
+      url: '/api/v1/fx-rates',
+      body: { base_currency: 'EUR', quote_currency: 'ZZZ', rate: 2, rate_date: '2026-06-01' },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(unknownCurrency.status).toBe(400);
+    expect(unknownCurrency.body.error.code).toBe(ErrorCodes.fxRateInvalid);
+
+    const sameCurrency = await request({
+      method: 'POST',
+      url: '/api/v1/fx-rates',
+      body: { base_currency: 'EUR', quote_currency: 'EUR', rate: 1, rate_date: '2026-06-01' },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(sameCurrency.status).toBe(400);
+
+    const convert = await request({
+      method: 'GET',
+      url: '/api/v1/fx-rates/convert?from=EUR&to=USD&amount=100&date=2026-06-15',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(convert.status).toBe(200);
+    expect(Number(convert.body.conversion.rate)).toBe(1.1);
+    expect(Number(convert.body.conversion.converted_amount)).toBeCloseTo(110, 6);
+
+    const inverse = await request({
+      method: 'GET',
+      url: '/api/v1/fx-rates/convert?from=USD&to=EUR&amount=11&date=2026-06-15',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(inverse.status).toBe(200);
+    expect(Number(inverse.body.conversion.converted_amount)).toBeCloseTo(10, 6);
+
+    const before = await request({
+      method: 'GET',
+      url: '/api/v1/fx-rates/convert?from=EUR&to=USD&amount=100&date=2026-01-01',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(before.status).toBe(404);
+    expect(before.body.error.code).toBe(ErrorCodes.fxRateNotFound);
+
+    const list = await request({
+      method: 'GET',
+      url: '/api/v1/fx-rates?base_currency=EUR&quote_currency=USD',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(list.status).toBe(200);
+    expect(list.body.fx_rates).toHaveLength(1);
+
+    const patch = await request({
+      method: 'PATCH',
+      url: `/api/v1/fx-rates/${fxRateId}`,
+      body: { rate: 1.15 },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(patch.status).toBe(200);
+    expect(Number(patch.body.fx_rate.rate)).toBe(1.15);
+
+    const del = await request({
+      method: 'DELETE',
+      url: `/api/v1/fx-rates/${fxRateId}`,
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(del.status).toBe(204);
+    const afterDelete = await request({
+      method: 'GET',
+      url: '/api/v1/fx-rates',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.80',
+    });
+    expect(afterDelete.body.fx_rates).toHaveLength(0);
+  });
 });

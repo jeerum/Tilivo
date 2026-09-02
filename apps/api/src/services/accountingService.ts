@@ -220,3 +220,289 @@ export async function reverseJournal(pool: Db, tenantId: string, entryId: string
     return entryNumber;
   });
 }
+
+export interface TaxCodeInput {
+  code: string;
+  name: string;
+  countryCode: string;
+  rate: string;
+  type: string;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  reportingMapping?: string | null;
+  isActive?: boolean;
+}
+
+export type TaxCodePatch = Partial<Omit<TaxCodeInput, 'effectiveFrom'>> & { effectiveFrom?: string };
+
+export async function listTaxCodes(pool: Db, tenantId: string): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      `SELECT id, code, name, country_code, rate, type, effective_from, effective_to,
+              reporting_mapping, is_active
+       FROM tax_codes
+       ORDER BY code, effective_from DESC`,
+    );
+    return result.rows;
+  });
+}
+
+export async function createTaxCode(pool: Db, tenantId: string, input: TaxCodeInput): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    try {
+      const result = await client.query(
+        `INSERT INTO tax_codes
+           (tenant_id, code, name, country_code, rate, type, effective_from, effective_to,
+            reporting_mapping, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, code, name, country_code, rate, type, effective_from, effective_to,
+                   reporting_mapping, is_active`,
+        [
+          tenantId,
+          input.code,
+          input.name,
+          input.countryCode,
+          input.rate,
+          input.type,
+          input.effectiveFrom,
+          input.effectiveTo ?? null,
+          input.reportingMapping ?? null,
+          input.isActive ?? true,
+        ],
+      );
+      return result.rows[0];
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code === '23505') {
+        throw new AppError(ErrorCodes.taxCodeDuplicate, 'Tax code already exists for effective date', 409);
+      }
+      throw error;
+    }
+  });
+}
+
+export async function updateTaxCode(
+  pool: Db,
+  tenantId: string,
+  taxCodeId: string,
+  patch: TaxCodePatch,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const updates: string[] = [];
+    const values: unknown[] = [tenantId, taxCodeId];
+    const columns: Array<[string, unknown]> = [
+      ['code', patch.code],
+      ['name', patch.name],
+      ['country_code', patch.countryCode],
+      ['rate', patch.rate],
+      ['type', patch.type],
+      ['effective_from', patch.effectiveFrom],
+      ['effective_to', patch.effectiveTo],
+      ['reporting_mapping', patch.reportingMapping],
+      ['is_active', patch.isActive],
+    ];
+    for (const [column, value] of columns) {
+      if (value !== undefined) {
+        updates.push(`${column} = $${values.length + 1}`);
+        values.push(value);
+      }
+    }
+    if (updates.length === 0) {
+      throw new AppError(ErrorCodes.taxCodeInvalid, 'No tax code fields to update', 400);
+    }
+    try {
+      const result = await client.query(
+        `UPDATE tax_codes
+         SET ${updates.join(', ')}
+         WHERE id = $2 AND tenant_id = $1
+         RETURNING id, code, name, country_code, rate, type, effective_from, effective_to,
+                   reporting_mapping, is_active`,
+        values,
+      );
+      if (!result.rows[0]) throw new AppError(ErrorCodes.taxCodeNotFound, 'Tax code not found', 404);
+      return result.rows[0];
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code === '23505') {
+        throw new AppError(ErrorCodes.taxCodeDuplicate, 'Tax code already exists for effective date', 409);
+      }
+      throw error;
+    }
+  });
+}
+
+export async function listFxRates(
+  pool: Db,
+  tenantId: string,
+  filters: { baseCurrency?: string; quoteCurrency?: string; from?: string; to?: string } = {},
+): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [tenantId];
+    if (filters.baseCurrency) {
+      values.push(filters.baseCurrency);
+      clauses.push(`base_currency = $${values.length}`);
+    }
+    if (filters.quoteCurrency) {
+      values.push(filters.quoteCurrency);
+      clauses.push(`quote_currency = $${values.length}`);
+    }
+    if (filters.from) {
+      values.push(filters.from);
+      clauses.push(`rate_date >= $${values.length}::date`);
+    }
+    if (filters.to) {
+      values.push(filters.to);
+      clauses.push(`rate_date <= $${values.length}::date`);
+    }
+    const where = clauses.length ? `WHERE tenant_id = $1 AND ${clauses.join(' AND ')}` : 'WHERE tenant_id = $1';
+    const result = await client.query(
+      `SELECT id, base_currency, quote_currency, rate, rate_date, source, created_at
+       FROM fx_rates
+       ${where}
+       ORDER BY rate_date DESC, created_at DESC
+       LIMIT 500`,
+      values,
+    );
+    return result.rows;
+  });
+}
+
+export async function createFxRate(
+  pool: Db,
+  tenantId: string,
+  input: { baseCurrency: string; quoteCurrency: string; rate: string; rateDate: string; source?: string },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    try {
+      const result = await client.query(
+        `INSERT INTO fx_rates (tenant_id, base_currency, quote_currency, rate, rate_date, source)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, base_currency, quote_currency, rate, rate_date, source, created_at`,
+        [tenantId, input.baseCurrency, input.quoteCurrency, input.rate, input.rateDate, input.source ?? 'MANUAL'],
+      );
+      return result.rows[0];
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code === '23505') {
+        throw new AppError(ErrorCodes.fxRateDuplicate, 'FX rate already exists for date and source', 409);
+      }
+      if (pgError.code === '23503') {
+        throw new AppError(ErrorCodes.fxRateInvalid, 'Currency does not exist', 400);
+      }
+      throw error;
+    }
+  });
+}
+
+export async function updateFxRate(
+  pool: Db,
+  tenantId: string,
+  fxRateId: string,
+  patch: { rate?: string; rateDate?: string; source?: string },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const updates: string[] = [];
+    const values: unknown[] = [tenantId, fxRateId];
+    for (const [column, value] of [
+      ['rate', patch.rate],
+      ['rate_date', patch.rateDate],
+      ['source', patch.source],
+    ] as Array<[string, unknown]>) {
+      if (value !== undefined) {
+        updates.push(`${column} = $${values.length + 1}`);
+        values.push(value);
+      }
+    }
+    if (updates.length === 0) throw new AppError(ErrorCodes.fxRateInvalid, 'No FX rate fields to update', 400);
+    try {
+      const result = await client.query(
+        `UPDATE fx_rates
+         SET ${updates.join(', ')}
+         WHERE id = $2 AND tenant_id = $1
+         RETURNING id, base_currency, quote_currency, rate, rate_date, source, created_at`,
+        values,
+      );
+      if (!result.rows[0]) throw new AppError(ErrorCodes.fxRateNotFound, 'FX rate not found', 404);
+      return result.rows[0];
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError.code === '23505') {
+        throw new AppError(ErrorCodes.fxRateDuplicate, 'FX rate already exists for date and source', 409);
+      }
+      if (pgError.code === '23503') {
+        throw new AppError(ErrorCodes.fxRateInvalid, 'Currency does not exist', 400);
+      }
+      throw error;
+    }
+  });
+}
+
+export async function deleteFxRate(pool: Db, tenantId: string, fxRateId: string): Promise<void> {
+  await withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query('DELETE FROM fx_rates WHERE id = $1 AND tenant_id = $2', [
+      fxRateId,
+      tenantId,
+    ]);
+    if (!result.rowCount) throw new AppError(ErrorCodes.fxRateNotFound, 'FX rate not found', 404);
+  });
+}
+
+export async function convertCurrency(
+  pool: Db,
+  tenantId: string,
+  input: { from: string; to: string; date: string; amount: string },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    if (input.from === input.to) {
+      return {
+        from: input.from,
+        to: input.to,
+        date: input.date,
+        rate: '1',
+        amount: input.amount,
+        converted_amount: input.amount,
+      };
+    }
+    const direct = await client.query(
+      `SELECT rate FROM fx_rates
+       WHERE tenant_id = $1 AND base_currency = $2 AND quote_currency = $3 AND rate_date <= $4::date
+       ORDER BY rate_date DESC, created_at DESC
+       LIMIT 1`,
+      [tenantId, input.from, input.to, input.date],
+    );
+    let rate: string;
+    if (direct.rows[0]) {
+      rate = String(direct.rows[0]!.rate);
+    } else {
+      const inverse = await client.query(
+        `SELECT rate FROM fx_rates
+         WHERE tenant_id = $1 AND base_currency = $2 AND quote_currency = $3 AND rate_date <= $4::date
+         ORDER BY rate_date DESC, created_at DESC
+         LIMIT 1`,
+        [tenantId, input.to, input.from, input.date],
+      );
+      if (!inverse.rows[0]) {
+        throw new AppError(ErrorCodes.fxRateNotFound, 'No FX rate available for date', 404);
+      }
+      rate = new Decimal(1).div(new Decimal(String(inverse.rows[0]!.rate))).toString();
+    }
+    const amount = new Decimal(input.amount);
+    const converted = amount.mul(new Decimal(rate));
+    return {
+      from: input.from,
+      to: input.to,
+      date: input.date,
+      rate,
+      amount: input.amount,
+      converted_amount: converted.toString(),
+    };
+  });
+}
+
+export async function listCurrencies(pool: Db): Promise<any[]> {
+  const result = await pool.query(
+    `SELECT code, name, minor_units, is_active FROM currencies WHERE is_active ORDER BY code`,
+  );
+  return result.rows;
+}

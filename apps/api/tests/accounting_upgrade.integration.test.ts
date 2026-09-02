@@ -161,7 +161,8 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     // Apply the v0.5 accounting migrations (core + hardening).
     await runMigrations(withDatabase(adminUrl!, dbName));
     const after = await adminDb.query('SELECT count(*)::int AS count FROM pgmigrations');
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 2);
+    // v0.5 release migrations: accounting core, accounting hardening, tax uniqueness.
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 3);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(

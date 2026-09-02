@@ -46,6 +46,13 @@ export const ErrorCodes = {
   journalLineInvalid: 'JRN-004',
   journalImmutable: 'JRN-005',
   journalAlreadyReversed: 'JRN-006',
+  taxCodeNotFound: 'TAX-001',
+  taxCodeInvalid: 'TAX-002',
+  taxCodeDuplicate: 'TAX-003',
+  fxRateNotFound: 'FX-001',
+  fxRateDuplicate: 'FX-002',
+  fxRateInvalid: 'FX-003',
+  currencyNotFound: 'CUR-001',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
