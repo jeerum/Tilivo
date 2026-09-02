@@ -2,65 +2,73 @@
 
 ## Current version
 
-**v0.1** (infrastruktuurivundament)
+**v0.2 (Identity)** – v0.1 hardening lõpetatud.
 
 ## Completed
 
-- Repo struktuur: `apps/api`, `apps/web`, `docs`, `deploy`, `compose.yaml`
-- Backend Fastify + TypeScript skeleton, `/api/v1`
-- `GET /api/v1/health` koos DB-kontrolliga (`SELECT 1`)
-- PostgreSQL ühendus ja isoleeritud DB (Docker Compose)
-- Migratsioonisüsteem node-pg-migrate + esimene migratsioon (`pgcrypto`)
-- Config/environment valideerimine (Zod)
-- Struktureeritud logid (pino), Trace ID (`x-trace-id`), Error ID baas
-- OpenAPI `/docs` (lubatud `EXPOSE_DOCS=true` korral)
-- Frontend React skeleton: lihtne hele UI, i18n ET/EN, health-state leht
-- Testiraamistik: Vitest; unit-testid API ja web jaoks
-- Lint (ESLint) + typecheck (TypeScript)
-- Build: tsup backend, Vite frontend
-- Dockerfile'id + isoleeritud Docker Compose (projekt `mrjkp`)
-- CI skeleton: root `test:ci`; GitHub Actions `deploy/ci.yml` (vt all)
-- Dokumentatsioon: README, ARCHITECTURE, DEPLOYMENT, IMPLEMENTATION_STATUS, CHANGELOG, ADR-id, BACKUP_STRATEGY
-- v0.1 deploy Linux VPS-ile isoleeritult (port 3100/3101, localhost)
+- v0.1 hardening:
+  - automaatne DB backup systemd timer'iga (`deploy/systemd`), retention 14 päeva;
+  - restore-test PASS (production backup -> ajutine test-DB -> integrity -> eemaldamine);
+  - restart policy `unless-stopped` + healthcheckid DB/API/Web PASS;
+  - secrets permissions PASS (`.env` 600, backup-kaust 700, logid ilma paroolideta);
+  - ADR-0004 PostgreSQL versioonipoliitika;
+  - health endpoint production vastus ilma version/env/time detailideta.
+- v0.2 migratsioonid: users, email_verification_tokens, password_reset_tokens, sessions,
+  totp_credentials, recovery_codes, two_factor_challenges, auth_attempts, audit_events,
+  dev_email_outbox.
+- v0.2 Identity API: register, e-mail verify/resend, login/logout, me, password forgot/reset/change,
+  TOTP setup/confirm/disable, recovery codes (genereerimine + ühekordne kasutus),
+  sessioonid (list, revoke, revoke-others), remember me 30 päeva, CSRF double-submit,
+  rate limiting + piiratud progressiivne cooldown, audit events, auth Error ID-d.
+- v0.2 frontend auth UI (ET/EN): register, verify, login (sh 2FA challenge), forgot/reset,
+  2FA seadistus + QR, recovery codes, sessioonid, password change, logout.
+- CI: lint, typecheck, unit tests, build + isoleeritud PostgreSQL integration job.
 
 ## In progress
 
-- Mitte ühtegi – v0.1 tõötsükkel on lõpetatud pärast smoke-testi.
+- Mitte ühtegi – v0.2 on lõpetatud.
 
 ## Not started
 
-- v0.2 Identity (users, register, e-mail verification, login, logout, password reset, TOTP 2FA,
-  remember me 30 päeva, sessions, rate limiting, brute-force protection)
 - v0.3 Multi-tenant / RLS
-- v0.4 Audit + inbox/outbox jne
-- Accounting core ja kõik hilisemad moodulid
-- Avalik DNS/nginx-kaitseta avamine
+- v0.4 Audit/trace/dokumendid/inbox/outbox edasiarendus
+- Accounting core (v0.5+) ja kõik hilisemad moodulid
+- Avalik DNS/nginx kasutuselevõtt
+- Production SMTP driver
 
 ## Known issues
 
-- Avalik kasutus ei ole veel avatud (puudub kasutaja valitud alamdomeen/DNS).
-- CI (GitHub Actions) on skeleton ja töötab pärast repo üleslaadimist esimest korda.
-- Hetkel puudub püsiv backup ajastamine serveris; vt `docs/BACKUP_STRATEGY.md`.
+- Avalik kasutus puudub teadlikult (ootab security review'd + kasutaja DNS-otsust).
+- Production e-mail on `noop`, kuni SMTP credentials on olemas; seetõttu ei saa prod-kasutaja enne seda
+  e-maili kinnitust lõpetada.
+- 2FA võtmerotatsioon on arhitektuuris ette nähtud, aga CLI/teenus veel puudub.
 
 ## Tests
 
-Viimane kohalik käivitamine (v0.1):
+Käivitatud ja tulemused:
 
 ```text
-apps/api:  lint PASS, typecheck PASS, unit tests 11 PASS (2 integration skipped ilma TEST_DATABASE_URL), build PASS
-apps/web:  lint PASS, typecheck PASS, unit tests 3 PASS, build PASS
-```
+Lokaalne: npm run test:ci
+  lint PASS, typecheck PASS
+  API unit-tests 23 PASS (integration skipped ilma TEST_DATABASE_URL)
+  Web unit-tests 3 PASS
+  build PASS
 
-Integration-testid migreeritud test-DB vastu (serveris): `docker compose --profile test run --rm
-accounting-test` – **13/13 PASS**; migratsiooni rollback testitud (`down` + `up` test-DB-s).
+Serveris (test-DB): docker compose --profile test run --rm --build accounting-test
+  36/36 PASS (unit + DB integration + identity security flows)
+
+Migratsioon: fresh test-DB up PASS; down+up PASS (rollback testitud test-DB-s)
+Backup: systemctl start mrjkp-accounting-backup.service PASS
+Restore-test: PASS (11 tabelit + pgcrypto taastatud ajutisse DB-sse)
+```
 
 ## Deployment status
 
-- Deploy: tehtud `/opt/mrjkp-accounting` (2026-09-02), containerid `mrjkp-accounting-*`, ainult `127.0.0.1:3100/3101`.
-- Healthcheck: `GET /api/v1/health` PASS.
-- Frontend: `GET http://127.0.0.1:3101/` PASS.
-- Olemasolevad teenused enne ja pärast: kontrollitud (nginx, docker-containerid, pordid) – muutumatud.
+- Deploy v0.2: `/opt/mrjkp-accounting`, containerid `mrjkp-accounting-*`, ainult `127.0.0.1:3100/3101`.
+- Migratsioon `20260902120000_identity` rakendatud production DB-s; enne migratsiooni backup + restore-test.
+- Healthcheck PASS; web PASS; auth negative smoke PASS (`AUTH-005`, `AUTH-002`, `AUTH-001`).
+- Olemasolevad teenused pärast deploy'd kontrollitud – muutumatud.
 
 ## Next step
 
-v0.2 Identity esimene slice: users tabel + registreerimise ja e-maili kinnituse API/protsess, testidega.
+v0.3 Multi-tenant / RLS – ei alustata automaatselt ilma eraldi ülesandeta.

@@ -1,4 +1,4 @@
-# Backup-strateegia – v0.1
+# Backup-strateegia
 
 ## Eesmärk
 
@@ -9,35 +9,43 @@ Tagada andmete taastatavus ja dokumenteerida RPO/RTO siht.
 - RPO <= 1 tund (kuni infrastruktuur seda võimaldab)
 - RTO <= 4 tundi
 
-## v0.1 baas (praegu rakendatud)
+## Praegu rakendatud
 
-- PostgreSQL volume on eraldi nimeline Docker volume: `mrjkp-accounting-db-data`.
-- DB püsib ka siis, kui containerid taaskäivitatakse.
-- `pg_dump` on dokumenteeritud viis täis-backup'iks.
+- PostgreSQL volume: eraldi nimeline Docker volume `mrjkp-accounting-db-data`.
+- Automaatne backup: systemd oneshot `mrjkp-accounting-backup.service` + timer iga päev 03:17
+  (`deploy/systemd/`), skript `deploy/backup.sh`.
+- Backup-kaust: `/opt/mrjkp-accounting/backups` (mode 700), backup-failid 600, logi `backup.log`
+  ilma paroolideta.
+- Retention: 14 päeva (konfigureeritav `RETENTION_DAYS`).
+- Restore-test: tehtud PASS – production backup taastati ajutisse `mrjkp_accounting_restore_test` DB-sse,
+  kontrolliti tabelid ja pgcrypto, seejärel DB eemaldati.
 
-## Soovitatav ajastatud backup (serveris, enne reaalseid andmeid)
+## Manuaalne käivitus ja kontroll
 
-Näidis crontab (jookseb root'ina):
-
-```cron
-15 * * * * docker exec $(docker ps -qf name=mrjkp-accounting-db-1) pg_dump -U mrjkp_accounting_app -d mrjkp_accounting | gzip > /root/mrjkp-backups/mrjkp_accounting_$(date +\%F_\%H).sql.gz
+```bash
+systemctl start mrjkp-accounting-backup.service
+systemctl status mrjkp-accounting-backup.service
+tail -5 /opt/mrjkp-accounting/backups/backup.log
 ```
-
-NB: see on näidis; enne kasutuselevõttu:
-
-- tee ka krüpteeritud off-site koopia;
-- kontrolli backup-monitooringut;
-- teosta kord kuus restore-test eraldi keskkonda (backup ei ole "working", kuni seda pole taastatud).
 
 ## Restore
 
 ```bash
-gunzip < backup.sql.gz | docker compose exec -T accounting-db psql -U mrjkp_accounting_app -d mrjkp_accounting
+gunzip < backups/mrjkp_accounting_XXXX.sql.gz \
+  | docker compose exec -T accounting-db psql -U mrjkp_accounting_app -d mrjkp_accounting
+```
+
+Restore-test protseduur (ei puuduta production DB-d):
+
+```bash
+CREATE DATABASE mrjkp_accounting_restore_test OWNER mrjkp_accounting_app;
+gunzip < backup.sql.gz | psql ... -d mrjkp_accounting_restore_test
+# integrity check
+DROP DATABASE mrjkp_accounting_restore_test;
 ```
 
 ## Põhimõtted
 
-- Production skeemi ei muudeta kunagi käsitsi ilma migratsioonita.
-- Kustutamist vajavad andmed liiguvad enne kustutamist arhiivi/backupi.
-- Saladused (`.env`, server.md) ei kuulu backup-artefaktidesse, mis repo'sse läheksid.
-
+- Production skeemi ei muudeta käsitsi ilma migratsioonita.
+- Backup ei ole "working", kuni seda pole taastatud; restore-test kuulub release-protsessi.
+- Saladused (`.env`, `server.md`) ei kuulu backup-artefaktidesse, mis repo'sse läheksid.
