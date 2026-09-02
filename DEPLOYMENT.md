@@ -74,6 +74,9 @@ Volume jääb alles. Enne täielikku eemaldamist tee DB backup:
 docker compose exec -T tilivo-db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup.sql
 ```
 
+Document-object restore protseduur on [docs/BACKUP_STRATEGY.md](docs/BACKUP_STRATEGY.md) –
+temp-kataloog, SHA-256 võrdlus DB-ga, cleanup, production volume'i ei kirjutata üle.
+
 ## Legacy / ajalooline
 
 - `/opt/mrjkp-accounting` (kui eksisteerib) on pre-rename koopia, mida ei käivitata; seda ei kustutata

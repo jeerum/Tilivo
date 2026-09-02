@@ -2,7 +2,7 @@
 
 ## Current version
 
-**v0.4 (Platform foundation + Desktop shell) – osaliselt valmis (vt Known issues/gate)**
+**v0.4 (Platform foundation + Desktop shell) – GATE PASS**
 
 Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (vt
 `docs/SECURITY_REVIEW_V0_2.md`).
@@ -46,13 +46,14 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
 - v0.4 tehtud täiendused: dokumentide hostile-maatriks + signature validation, audit hash-chain
   tamper-test, object-storage backup (tilivo-backup.sh), settings desktop nav, mobile drawer,
   UA parser.
-- V0.4 lõpetamata: production document/audit smoke, object-restore+SHA-256 protseduur, UI E2E.
+- V0.4 lõpetatud: object backup/restore + SHA-256, production document/audit smoke, Playwright E2E.
 
 ## Tests
 
 ```text
 npm run test:ci PASS (lint, typecheck, API unit, web unit, build)
 Serveris test-DB: 57/57 PASS (sh v0.4 hostile doc matrix + audit tamper)
+Playwright: 4 PASS / 2 project-skip (desktop/tablet/mobile layout, tenant switch)
 Migratsioon up/down PASS
 Backup PASS, restore PASS
 ```

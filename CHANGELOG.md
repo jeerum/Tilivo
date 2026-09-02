@@ -8,6 +8,13 @@
 - Retention policies/holds foundation.
 - Integration inbox/outbox + `tilivo-worker` container.
 
+## [0.4.0 gate closure] - 2026-09-02
+
+- Object storage backup/restore + SHA-256 verification PASS.
+- Production document/audit/cross-tenant smoke PASS.
+- Playwright desktop/tablet/mobile + tenant switch PASS.
+- `V0.4 PLATFORM + DESKTOP UI GATE: PASS`.
+
 ## [0.3.0] - 2026-09-02
 
 - Multi-tenant domain: tenants, companies, memberships, roles, permissions.
