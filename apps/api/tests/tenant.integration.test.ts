@@ -33,7 +33,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     const config = loadConfig({
       NODE_ENV: 'test',
       DATABASE_URL: databaseUrl!,
-      LOG_LEVEL: 'silent',
+      LOG_LEVEL: 'info',
       EMAIL_DRIVER: 'dev',
       EMAIL_DEV_OUTBOX: 'true',
       TOTP_ENCRYPTION_KEY: 'a'.repeat(64),
