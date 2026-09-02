@@ -60,6 +60,28 @@ POST /api/v1/auth/2fa/recovery-codes
 
 Turvamudel on kirjeldatud [`docs/IDENTITY_SECURITY.md`](docs/IDENTITY_SECURITY.md).
 
+## Accounting API (v0.5)
+
+```text
+GET/POST   /api/v1/accounts
+GET/POST   /api/v1/fiscal-years
+GET/POST   /api/v1/accounting-periods
+PATCH/POST /api/v1/accounting-periods/:id | /:id/reopen
+GET/POST   /api/v1/journals
+GET        /api/v1/journals/:id
+POST       /api/v1/journals/:id/post | /:id/reverse
+GET        /api/v1/ledger
+GET        /api/v1/accounts/:id/ledger
+GET        /api/v1/reports/trial-balance
+GET/POST/PATCH /api/v1/tax-codes
+GET/POST/PATCH/DELETE /api/v1/fx-rates
+GET        /api/v1/fx-rates/convert
+GET        /api/v1/currencies
+```
+
+Ülevaade: [`docs/ACCOUNTING_CORE.md`](docs/ACCOUNTING_CORE.md) ja ADR-id
+`docs/decisions/ADR-0010..0015`.
+
 ## Kohalik arendus
 
 ```bash

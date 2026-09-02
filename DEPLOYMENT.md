@@ -58,8 +58,29 @@ systemctl list-timers tilivo-backup.timer
 ```bash
 cd /opt/tilivo
 set -a; . ./.env; set +a
+# Hermeetiline jooks: nullib tilivo_accounting_test enne migratsiooni + testi
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS tilivo_accounting_test"
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE tilivo_accounting_test OWNER $POSTGRES_USER"
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -c "GRANT CONNECT ON DATABASE tilivo_accounting_test TO tilivo_runtime, tilivo_worker"
 docker compose --profile test run --rm --build tilivo-test
 ```
+
+Vaikimisi jookseb kogu suite; osaliseks jooksuks anna `TEST_FILTER` (nt
+`TEST_FILTER='tests/accounting' docker compose --profile test run --rm --build tilivo-test`).
+
+## v0.5 production migrate
+
+Enne esimest v0.5 migratsiooni tehakse DB backup + restore-test isoleeritud
+DB-sse. Deploy ja migratsioon:
+
+```bash
+cd /opt/tilivo
+./deploy/remote-deploy.sh
+docker compose run --rm --no-deps tilivo-api node dist/migrate.js up
+```
+
+Uued migratsioonid: `20260902220000_accounting_core`,
+`20260903000000_accounting_hardening`, `20260903010000_tax_codes_unique`.
 
 ## Rollback
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0] - 2026-09-02
+
+- Accounting schema: accounts, fiscal_years, accounting_periods,
+  journal_entries/journal_lines/journal_reversals, tax_codes, fx_rates,
+  currencies, journal_sequences; RLS + FORCE RLS on tenant-owned tables.
+- Controlled posting engine with period enforcement, balance invariant,
+  atomic `YYYY-######` numbering and mirrored reversals.
+- DB hardening: posted immutability (incl. direct runtime SQL), DRAFT-only
+  insert rule, reversal linkage/mirror validation.
+- API: journal list/detail, ledger + account ledger, trial balance, tax codes,
+  FX rates + conversion, currencies; journal drafts accept tax codes.
+- Permissions accounting.read/journal.*/period.*/chart.manage; desktop UI
+  `/accounting` with journal, chart, periods and reports (ET/EN).
+- Bugfixes vs 6cf0cd7: reversal status transition, first entry number,
+  journal_entries INSERT trigger, builtin role accounting permissions,
+  tax code unique index.
+- Tests: v0.4 -> v0.5 upgrade, DB immutability, double post, 100 parallel
+  numbering, reversal race, period close vs post, tax/FX, ledger/trial balance,
+  permission/RLS/CSRF matrix.
+
 ## [0.4.0-partial] - 2026-09-02
 
 - Desktop-first AppShell (sidebar + topbar, wide workspace).
