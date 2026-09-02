@@ -9,6 +9,7 @@ import {
   receiveInboxEvent,
 } from '../src/services/integrationQueue';
 import { verifyAuditChain } from '../src/services/auditQuery';
+import { withTenantTransaction } from '../src/services/tenantService';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const workerDatabaseUrl = process.env.WORKER_TEST_DATABASE_URL;
@@ -256,9 +257,12 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
     expect(confirm.statusCode).toBe(200);
 
     await expect(
-      pool.query(`UPDATE document_versions SET original_filename = 'tampered' WHERE document_id = $1`, [
-        documentId,
-      ]),
+      withTenantTransaction(pool, tenantA, async (client) => {
+        await client.query(
+          `UPDATE document_versions SET original_filename = 'tampered' WHERE document_id = $1`,
+          [documentId],
+        );
+      }),
     ).rejects.toMatchObject({ message: expect.stringContaining('immutable') });
   });
 });
