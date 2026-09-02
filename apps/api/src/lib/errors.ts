@@ -33,6 +33,19 @@ export const ErrorCodes = {
   auditNotFound: 'AUDIT-001',
   inboxDuplicate: 'INBOX-001',
   outboxClaim: 'OUTBOX-001',
+  accountNotFound: 'ACC-001',
+  accountInactive: 'ACC-002',
+  duplicateAccountCode: 'ACC-003',
+  periodNotFound: 'PERIOD-001',
+  periodClosed: 'PERIOD-002',
+  periodSoftClosed: 'PERIOD-003',
+  invalidPeriodRange: 'PERIOD-004',
+  journalNotFound: 'JRN-001',
+  journalNotDraft: 'JRN-002',
+  journalNotBalanced: 'JRN-003',
+  journalLineInvalid: 'JRN-004',
+  journalImmutable: 'JRN-005',
+  journalAlreadyReversed: 'JRN-006',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
