@@ -29,9 +29,10 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: Record<string, unknown>;
   csrf?: string;
+  headers?: Record<string, string>;
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -40,6 +41,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   };
   if (options.body) headers['content-type'] = 'application/json';
   if (options.csrf) headers['x-csrf-token'] = options.csrf;
+  if (options.headers) Object.assign(headers, options.headers);
 
   const response = await fetch(path, {
     method: options.method ?? 'GET',

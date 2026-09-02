@@ -308,6 +308,15 @@ export function HomePage() {
   const [code, setCode] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [tenants, setTenants] = useState<Array<{ id: string; name: string }>>([]);
+  const [currentTenantId, setCurrentTenantId] = useState('');
+  const [company, setCompany] = useState<any | null>(null);
+  const [members, setMembers] = useState<any[]>([]);
+  const [roles, setRoles] = useState<any[]>([]);
+  const [tenantName, setTenantName] = useState('');
+  const [companyLegalName, setCompanyLegalName] = useState('');
+  const [memberEmail, setMemberEmail] = useState('');
+  const [inviteMessage, setInviteMessage] = useState('');
 
   const loadSessions = async () => {
     const result = await api<{ sessions: SessionInfo[] }>('/api/v1/auth/sessions', { csrf });
@@ -317,6 +326,37 @@ export function HomePage() {
   useEffect(() => {
     void loadSessions().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    api<{ tenants: Array<{ id: string; name: string }> }>('/api/v1/tenants', { csrf })
+      .then((result) => {
+        setTenants(result.tenants);
+        if (result.tenants.length > 0 && !currentTenantId) {
+          setCurrentTenantId(result.tenants[0]!.id);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!currentTenantId) return;
+    setCompany(null);
+    setMembers([]);
+    setRoles([]);
+    const headers = { 'x-tilivo-tenant-id': currentTenantId };
+    api<{ company: any }>('/api/v1/companies/current', { headers })
+      .then((result) => {
+        setCompany(result.company);
+        setCompanyLegalName(result.company.legal_name ?? '');
+      })
+      .catch(() => undefined);
+    api<{ members: any[] }>('/api/v1/members', { headers })
+      .then((result) => setMembers(result.members))
+      .catch(() => undefined);
+    api<{ roles: any[] }>('/api/v1/roles', { headers })
+      .then((result) => setRoles(result.roles))
+      .catch(() => undefined);
+  }, [currentTenantId]);
 
   if (!user) return <Navigate to="/login" replace />;
 
@@ -413,6 +453,64 @@ export function HomePage() {
     await loadSessions();
   };
 
+  const createCompanyTenant = async () => {
+    setError(null);
+    setInviteMessage('');
+    try {
+      const result = await api<{ tenant: { id: string; name: string } }>('/api/v1/tenants', {
+        method: 'POST',
+        body: {
+          name: tenantName,
+          company: { legal_name: companyLegalName || tenantName, country_code: 'FI', base_currency: 'EUR' },
+        },
+        csrf,
+      });
+      setTenants((prev) => [...prev, result.tenant]);
+      setCurrentTenantId(result.tenant.id);
+      setTenantName('');
+      setCompanyLegalName('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const updateCompany = async () => {
+    setError(null);
+    try {
+      const result = await api<{ company: any }>('/api/v1/companies/current', {
+        method: 'PATCH',
+        body: { legal_name: companyLegalName },
+        headers: { 'x-tilivo-tenant-id': currentTenantId },
+        csrf,
+      });
+      setCompany(result.company);
+      setMessage(t('save'));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const addMemberByEmail = async () => {
+    setError(null);
+    setInviteMessage('');
+    try {
+      await api('/api/v1/members', {
+        method: 'POST',
+        body: { email: memberEmail, role_name: 'Employee' },
+        headers: { 'x-tilivo-tenant-id': currentTenantId },
+        csrf,
+      });
+      setInviteMessage(t('checkEmail'));
+      setMemberEmail('');
+      const result = await api<{ members: any[] }>('/api/v1/members', {
+        headers: { 'x-tilivo-tenant-id': currentTenantId },
+      });
+      setMembers(result.members);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   return (
     <AuthCard title={t('welcomeBack')}>
       <p className="muted">
@@ -420,6 +518,85 @@ export function HomePage() {
       </p>
       {message && <p className="success-text">{message}</p>}
       <ErrorNote error={error} />
+      {tenants.length === 0 ? (
+        <section className="card">
+          <h2>{t('createYourCompany')}</h2>
+          <p className="muted">{t('noTenants')}</p>
+          <Field label={t('companyName')} type="text" value={tenantName} onChange={setTenantName} />
+          <Field
+            label={t('legalName')}
+            type="text"
+            value={companyLegalName}
+            onChange={setCompanyLegalName}
+          />
+          <button type="button" className="primary" onClick={() => void createCompanyTenant()}>
+            {t('createCompany')}
+          </button>
+        </section>
+      ) : (
+        <section className="card">
+          <label className="field">
+            <span>{t('tenantSwitcher')}</span>
+            <select
+              value={currentTenantId}
+              onChange={(event) => setCurrentTenantId(event.target.value)}
+            >
+              {tenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {company && (
+            <div>
+              <h3>{t('companySettings')}</h3>
+              <Field
+                label={t('legalName')}
+                type="text"
+                value={companyLegalName}
+                onChange={setCompanyLegalName}
+              />
+              <button type="button" className="primary" onClick={() => void updateCompany()}>
+                {t('save')}
+              </button>
+            </div>
+          )}
+
+          <h3>{t('members')}</h3>
+          <div className="field">
+            <span>{t('memberEmail')}</span>
+            <input value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} />
+          </div>
+          <button type="button" onClick={() => void addMemberByEmail()}>
+            {t('register')}
+          </button>
+          {inviteMessage && <p className="muted">{inviteMessage}</p>}
+          <ul className="session-list">
+            {members.map((member) => (
+              <li key={member.id}>
+                <span>
+                  {member.email} · {member.status} · {member.roles.join(', ')}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <h3>{t('roles')}</h3>
+          <ul className="session-list">
+            {roles.map((role) => (
+              <li key={role.id}>
+                <span>
+                  <strong>{role.name}</strong>
+                  <br />
+                  <small>{role.permissions.join(', ')}</small>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="card">
         <h2>{t('sessionsTitle')}</h2>
