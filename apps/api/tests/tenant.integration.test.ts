@@ -153,7 +153,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
       ip: '10.0.10.10',
     });
     const csrf = login.body.csrf_token as string;
-    const created = await createTenant(cookie, csrf, 'Owner Test Oy', '10.0.10.10');
+    const created = await createTenant(login.cookie, csrf, 'Owner Test Oy', '10.0.10.10');
 
     const members = await request({
       method: 'GET',
@@ -186,14 +186,14 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
   });
 
   it('denies access to a user without membership', async () => {
-    const owner = await registerUser('10.0.10.20');
+    await registerUser('10.0.10.20');
     const loginA = await request({
       method: 'POST',
       url: '/api/v1/auth/login',
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.20',
     });
-    const tenant = await createTenant(owner, loginA.body.csrf_token, 'Deny Tenant Oy', '10.0.10.20');
+    const tenant = await createTenant(loginA.cookie, loginA.body.csrf_token, 'Deny Tenant Oy', '10.0.10.20');
     const outsider = await registerUser('10.0.10.21');
     const attempt = await request({
       method: 'GET',
@@ -207,14 +207,14 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
   });
 
   it('enforces permissions: Viewer can read but not manage', async () => {
-    const ownerCookie = await registerUser('10.0.10.30');
+    await registerUser('10.0.10.30');
     const ownerLogin = await request({
       method: 'POST',
       url: '/api/v1/auth/login',
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.30',
     });
-    const tenant = await createTenant(ownerCookie, ownerLogin.body.csrf_token, 'Permission Oy', '10.0.10.30');
+    const tenant = await createTenant(ownerLogin.cookie, ownerLogin.body.csrf_token, 'Permission Oy', '10.0.10.30');
 
     const viewerCookie = await registerUser('10.0.10.31');
     const viewerEmail = `tenant${counter}@example.com`;
@@ -223,7 +223,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
       method: 'POST',
       url: '/api/v1/members',
       body: { email: viewerEmail, role_name: 'Viewer' },
-      cookie: ownerCookie,
+      cookie: ownerLogin.cookie,
       csrf: ownerLogin.body.csrf_token,
       tenantId: tenant.tenantId,
       ip: '10.0.10.30',
@@ -269,7 +269,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
   });
 
   it('protects the last Owner and allows removal when another Owner exists', async () => {
-    const ownerCookie = await registerUser('10.0.10.40');
+    await registerUser('10.0.10.40');
     const ownerEmail = emailOfLastRegistered();
     const ownerLogin = await request({
       method: 'POST',
@@ -277,7 +277,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.40',
     });
-    const tenant = await createTenant(ownerCookie, ownerLogin.body.csrf_token, 'Owners Oy', '10.0.10.40');
+    const tenant = await createTenant(ownerLogin.cookie, ownerLogin.body.csrf_token, 'Owners Oy', '10.0.10.40');
 
     await registerUser('10.0.10.41');
     const secondOwnerEmail = emailOfLastRegistered();
@@ -285,7 +285,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
       method: 'POST',
       url: '/api/v1/members',
       body: { email: secondOwnerEmail, role_name: 'Owner' },
-      cookie: ownerCookie,
+      cookie: ownerLogin.cookie,
       csrf: ownerLogin.body.csrf_token,
       tenantId: tenant.tenantId,
       ip: '10.0.10.40',
@@ -294,7 +294,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     const membersAfterAdd = await request({
       method: 'GET',
       url: '/api/v1/members',
-      cookie: ownerCookie,
+      cookie: ownerLogin.cookie,
       tenantId: tenant.tenantId,
       ip: '10.0.10.40',
     });
@@ -306,7 +306,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     const removeSecond = await request({
       method: 'DELETE',
       url: `/api/v1/members/${memberId}`,
-      cookie: ownerCookie,
+      cookie: ownerLogin.cookie,
       csrf: ownerLogin.body.csrf_token,
       tenantId: tenant.tenantId,
       ip: '10.0.10.40',
@@ -316,7 +316,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     const members = await request({
       method: 'GET',
       url: '/api/v1/members',
-      cookie: ownerCookie,
+      cookie: ownerLogin.cookie,
       tenantId: tenant.tenantId,
       ip: '10.0.10.40',
     });
@@ -326,7 +326,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     const removeLast = await request({
       method: 'DELETE',
       url: `/api/v1/members/${ownerMembership.id}`,
-      cookie: ownerCookie,
+      cookie: ownerLogin.cookie,
       csrf: ownerLogin.body.csrf_token,
       tenantId: tenant.tenantId,
       ip: '10.0.10.40',
@@ -336,22 +336,22 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
   });
 
   it('RLS direct: runtime role sees only its tenant and nothing without context', async () => {
-    const ownerA = await registerUser('10.0.10.50');
+    await registerUser('10.0.10.50');
     const loginA = await request({
       method: 'POST',
       url: '/api/v1/auth/login',
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.50',
     });
-    const tenantA = await createTenant(ownerA, loginA.body.csrf_token, 'RLS A Oy', '10.0.10.50');
-    const ownerB = await registerUser('10.0.10.51');
+    const tenantA = await createTenant(loginA.cookie, loginA.body.csrf_token, 'RLS A Oy', '10.0.10.50');
+    await registerUser('10.0.10.51');
     const loginB = await request({
       method: 'POST',
       url: '/api/v1/auth/login',
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.51',
     });
-    const tenantB = await createTenant(ownerB, loginB.body.csrf_token, 'RLS B Oy', '10.0.10.51');
+    const tenantB = await createTenant(loginB.cookie, loginB.body.csrf_token, 'RLS B Oy', '10.0.10.51');
 
     const client = await pool.connect();
     try {
@@ -397,7 +397,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.60',
     });
-    const tenantA = await createTenant(ownerA, loginA.body.csrf_token, 'Pool A Oy', '10.0.10.60');
+    const tenantA = await createTenant(loginA.cookie, loginA.body.csrf_token, 'Pool A Oy', '10.0.10.60');
     const ownerB = await registerUser('10.0.10.61');
     const loginB = await request({
       method: 'POST',
@@ -405,7 +405,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
       body: { email: `tenant${counter}@example.com`, password: PASSWORD },
       ip: '10.0.10.61',
     });
-    const tenantB = await createTenant(ownerB, loginB.body.csrf_token, 'Pool B Oy', '10.0.10.61');
+    const tenantB = await createTenant(loginB.cookie, loginB.body.csrf_token, 'Pool B Oy', '10.0.10.61');
 
     const results = await Promise.all(
       Array.from({ length: 24 }, (_, i) => {
