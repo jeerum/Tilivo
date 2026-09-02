@@ -97,6 +97,16 @@ See `apps/api/tests/accounting.integration.test.ts`,
 - ledger, account ledger, trial balance and journal views;
 - draft exclusion from balances.
 
+## Audit events
+
+Accounting actions write to the existing v0.4 audit trail:
+`ACCOUNT.CREATED`, `JOURNAL.DRAFT_CREATED`, `JOURNAL.POSTED`,
+`JOURNAL.REVERSED`, `PERIOD.SOFT_CLOSED`, `PERIOD.CLOSED`,
+`PERIOD.REOPENED`, `TAX_CODE.CREATED`, `FX_RATE.CREATED`. Metadata carries
+entry numbers and object ids only - never secrets or document contents.
+Audit appends are serialised before the transaction starts so the hash chain
+stays valid under parallel writes.
+
 ## Backups and deployment
 
 Backups cover the database and object storage; restore is tested in isolation

@@ -19,6 +19,17 @@
 - Tests: v0.4 -> v0.5 upgrade, DB immutability, double post, 100 parallel
   numbering, reversal race, period close vs post, tax/FX, ledger/trial balance,
   permission/RLS/CSRF matrix.
+- Audit events for accounting actions on the existing hash chain; audit chain
+  writes serialised before transaction start (concurrency fix).
+
+## [0.5.0 gate closure] - 2026-09-02
+
+- Full regression 71/71 PASS (server test DB), local test:ci PASS, npm audit 0.
+- Production: backup/restore + SHA-256 PASS; v0.4 backup copy migrated to v0.5
+  with data preserved; production migrate + api/web deploy PASS.
+- Production accounting smoke 34/34 PASS; Playwright UI 8 PASS / 1 skip.
+- Existing host/container services unchanged.
+- `V0.5 ACCOUNTING CORE GATE: PASS`.
 
 ## [0.4.0-partial] - 2026-09-02
 

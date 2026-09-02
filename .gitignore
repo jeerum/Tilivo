@@ -16,6 +16,7 @@ server.local.md
 # Deploy artifacts and temp files
 *.tar.gz
 tmp_*.sh
+tmp_*.mjs
 tmp_smoke_files/
 tmp_*.json
 tmp_*.txt

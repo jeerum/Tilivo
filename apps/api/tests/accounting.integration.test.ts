@@ -297,6 +297,12 @@ describe.skipIf(!databaseUrl)('v0.5 accounting core', () => {
     expect(post.status).toBe(200);
     expect(post.body.status).toBe('POSTED');
     expect(String(post.body.entry_number)).toMatch(/^2026-\d{6}$/);
+    const auditPosted = await pool.query(
+      `SELECT count(*)::int AS count FROM audit_events
+       WHERE action = 'JOURNAL.POSTED' AND object_id = $1`,
+      [draftId],
+    );
+    expect(auditPosted.rows[0]!.count).toBe(1);
 
     const duplicate = await request({
       method: 'POST',
@@ -320,6 +326,12 @@ describe.skipIf(!databaseUrl)('v0.5 accounting core', () => {
     });
     expectStatus(reversal, 200, 'reverse journal');
     expect(String(reversal.body.reversal_entry_number)).toMatch(/^2026-\d{6}$/);
+    const auditReversed = await pool.query(
+      `SELECT count(*)::int AS count FROM audit_events
+       WHERE action = 'JOURNAL.REVERSED' AND object_id = $1`,
+      [draftId],
+    );
+    expect(auditReversed.rows[0]!.count).toBe(1);
 
     const doubleReverse = await request({
       method: 'POST',

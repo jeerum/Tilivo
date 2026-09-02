@@ -145,22 +145,6 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
     }
   });
 
-  it('audit hash chain detects tampering', async () => {
-    if (!ownerPool) return;
-    const before = await verifyAuditChain(ownerPool);
-    expect(before.valid).toBe(true);
-    const target = await ownerPool.query(
-      'SELECT id FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 1',
-    );
-    if (!target.rows[0]) return;
-    await ownerPool.query(`UPDATE audit_events SET metadata = '{"tampered":true}' WHERE id = $1`, [
-      target.rows[0].id,
-    ]);
-    const after = await verifyAuditChain(ownerPool);
-    expect(after.valid).toBe(false);
-    expect(after.brokenAt).toBeTruthy();
-  });
-
   it('audit hash chain stays valid under parallel writes', async () => {
     const request = {
       ip: '10.0.99.10',
@@ -176,6 +160,22 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
     );
     const check = await verifyAuditChain(ownerPool ?? pool);
     expect(check.valid).toBe(true);
+  });
+
+  it('audit hash chain detects tampering', async () => {
+    if (!ownerPool) return;
+    const before = await verifyAuditChain(ownerPool);
+    expect(before.valid).toBe(true);
+    const target = await ownerPool.query(
+      'SELECT id FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 1',
+    );
+    if (!target.rows[0]) return;
+    await ownerPool.query(`UPDATE audit_events SET metadata = '{"tampered":true}' WHERE id = $1`, [
+      target.rows[0].id,
+    ]);
+    const after = await verifyAuditChain(ownerPool);
+    expect(after.valid).toBe(false);
+    expect(after.brokenAt).toBeTruthy();
   });
 
   it('inbox is idempotent by provider/external id', async () => {

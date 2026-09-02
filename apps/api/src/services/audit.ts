@@ -35,7 +35,16 @@ export type AuditAction =
   | 'ROLE.REVOKED'
   | 'DOCUMENT.UPLOADED'
   | 'DOCUMENT.CONFIRMED'
-  | 'DOCUMENT.DOWNLOADED';
+  | 'DOCUMENT.DOWNLOADED'
+  | 'ACCOUNT.CREATED'
+  | 'JOURNAL.DRAFT_CREATED'
+  | 'JOURNAL.POSTED'
+  | 'JOURNAL.REVERSED'
+  | 'PERIOD.SOFT_CLOSED'
+  | 'PERIOD.CLOSED'
+  | 'PERIOD.REOPENED'
+  | 'TAX_CODE.CREATED'
+  | 'FX_RATE.CREATED';
 
 function requestMetadata(request: FastifyRequest): { ip: string; userAgent: string; traceId: string } {
   return {

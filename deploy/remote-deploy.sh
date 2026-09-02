@@ -3,6 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Tar-sync from Windows often strips executable bits; keep deploy scripts runnable.
+chmod +x deploy/*.sh 2>/dev/null || true
+
 if [[ ! -f .env ]]; then
   echo "ERROR: .env puudub. Kopeeri .env.example ja täida väärtused." >&2
   exit 1

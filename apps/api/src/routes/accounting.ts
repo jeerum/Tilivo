@@ -26,6 +26,7 @@ import {
 } from '../services/accountingService';
 import { resolveSessionUser } from '../services/sessionContext';
 import { requirePermission, resolveTenantAccess, withTenantTransaction } from '../services/tenantService';
+import { writeAuditEvent } from '../services/audit';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -104,6 +105,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
         [tenantId, String(body.code), String(body.name), type, normal],
       ),
     );
+    await writeAuditEvent(db, 'ACCOUNT.CREATED', request, {
+      userId,
+      tenantId,
+      objectType: 'account',
+      objectId: String(result.rows[0]!.id),
+      metadata: { code: String(body.code), name: String(body.name), type },
+    });
     return reply.code(201).send({ account: result.rows[0] });
   });
 
@@ -168,6 +176,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
         credit: String(line.credit ?? 0),
         taxCodeId: line.tax_code_id === undefined || line.tax_code_id === null ? null : String(line.tax_code_id),
       })),
+    });
+    await writeAuditEvent(db, 'JOURNAL.DRAFT_CREATED', request, {
+      userId,
+      tenantId,
+      objectType: 'journal_entry',
+      objectId: id,
+      metadata: { business_date: String(body.business_date), description: String(body.description ?? '') },
     });
     return reply.code(201).send({ journal_id: id, status: 'DRAFT' });
   });
@@ -235,6 +250,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       effectiveTo: body.effective_to,
       reportingMapping: body.reporting_mapping,
       isActive: body.is_active,
+    });
+    await writeAuditEvent(db, 'TAX_CODE.CREATED', request, {
+      userId,
+      tenantId,
+      objectType: 'tax_code',
+      objectId: String(taxCode.id),
+      metadata: { code: String(taxCode.code), rate: String(taxCode.rate) },
     });
     return reply.code(201).send({ tax_code: taxCode });
   });
@@ -323,6 +345,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       rateDate: body.rate_date,
       source: body.source,
     });
+    await writeAuditEvent(db, 'FX_RATE.CREATED', request, {
+      userId,
+      tenantId,
+      objectType: 'fx_rate',
+      objectId: String(fxRate.id),
+      metadata: { base_currency: body.base_currency, quote_currency: body.quote_currency, rate: String(fxRate.rate) },
+    });
     return reply.code(201).send({ fx_rate: fxRate });
   });
 
@@ -359,6 +388,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'journal.post');
     const entryNumber = await postJournal(db, tenantId, request.params.id, userId);
+    await writeAuditEvent(db, 'JOURNAL.POSTED', request, {
+      userId,
+      tenantId,
+      objectType: 'journal_entry',
+      objectId: request.params.id,
+      metadata: { entry_number: entryNumber },
+    });
     return reply.send({ status: 'POSTED', entry_number: entryNumber });
   });
 
@@ -368,6 +404,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       const { userId, tenantId } = await context(request, db, config);
       await requirePermission(db, userId, tenantId, 'journal.reverse');
       const number = await reverseJournal(db, tenantId, request.params.id, userId, String(request.body?.reason ?? ''));
+      await writeAuditEvent(db, 'JOURNAL.REVERSED', request, {
+        userId,
+        tenantId,
+        objectType: 'journal_entry',
+        objectId: request.params.id,
+        metadata: { reversal_entry_number: number },
+      });
       return reply.send({ status: 'REVERSED', reversal_entry_number: number });
     },
   );
@@ -380,6 +423,12 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       const status = String(request.body?.status ?? '');
       if (status !== 'SOFT_CLOSED' && status !== 'CLOSED') throw new AppError(ErrorCodes.invalidPeriodRange, 'Invalid period status', 400);
       await setPeriodStatus(db, tenantId, request.params.id, status, userId);
+      await writeAuditEvent(db, status === 'CLOSED' ? 'PERIOD.CLOSED' : 'PERIOD.SOFT_CLOSED', request, {
+        userId,
+        tenantId,
+        objectType: 'accounting_period',
+        objectId: request.params.id,
+      });
       return reply.send({ message: 'Period updated' });
     },
   );
@@ -390,6 +439,13 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       const { userId, tenantId } = await context(request, db, config);
       await requirePermission(db, userId, tenantId, 'period.reopen');
       await reopenPeriod(db, tenantId, request.params.id, userId, String(request.body?.reason ?? ''));
+      await writeAuditEvent(db, 'PERIOD.REOPENED', request, {
+        userId,
+        tenantId,
+        objectType: 'accounting_period',
+        objectId: request.params.id,
+        metadata: { reason: String(request.body?.reason ?? '') },
+      });
       return reply.send({ message: 'Period reopened' });
     },
   );
