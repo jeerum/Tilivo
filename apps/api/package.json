@@ -1,0 +1,46 @@
+{
+  "name": "@mrjkp/accounting-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MRJKP Accounting API - modular monolith backend",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "migrate": "node dist/migrate.js up",
+    "migrate:down": "node dist/migrate.js down",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/swagger": "^9.4.2",
+    "@fastify/swagger-ui": "^6.1.1",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.13.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.7",
+    "@types/pg": "^8.11.11",
+    "eslint": "^9.18.0",
+    "tsup": "^8.3.6",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.22.0",
+    "vitest": "^3.0.4"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
+  }
+}
