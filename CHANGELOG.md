@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0-partial] - 2026-09-02
+
+- Desktop-first AppShell (sidebar + topbar, wide workspace).
+- Audit: hash-chain, append-only, runtime UPDATE/DELETE denied.
+- Documents/document_versions + local object storage + RLS; upload/confirm/download API.
+- Retention policies/holds foundation.
+- Integration inbox/outbox + `tilivo-worker` container.
+
 ## [0.3.0] - 2026-09-02
 
 - Multi-tenant domain: tenants, companies, memberships, roles, permissions.

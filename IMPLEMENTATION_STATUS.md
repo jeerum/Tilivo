@@ -2,7 +2,7 @@
 
 ## Current version
 
-**v0.3 (Multi-Tenant + PostgreSQL RLS)**
+**v0.4 (Platform foundation + Desktop shell) – osaliselt valmis (vt Known issues/gate)**
 
 Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (vt
 `docs/SECURITY_REVIEW_V0_2.md`).
@@ -25,6 +25,8 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
   dev e-mail guard, Cache-Control, trust boundary, 2FA cooldown.
 - v0.3: tenants/companies/memberships/roles/permissions, runtime DB roll + FORCE RLS,
   tenant transaction helper, permission service, tenant API ja frontend onboarding/switcher.
+- v0.4: desktop-first AppShell, audit hash-chain + append-only, documents/document_versions +
+  local object storage, retention foundation, inbox/outbox + worker container, Error ID registry docs.
 
 ## In progress
 
@@ -41,12 +43,14 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
 - Volume füüsiline nimi on legacy (`mrjkp-accounting-db-data`) – teadlik otsus, et andmeid mitte
   kopeerida ega riskida; dokumenteeritud.
 - `/opt/mrjkp-accounting` (pre-rename koopia) jääb alles kuni eraldi kokkuleppeni.
+- v0.4 lõpetamata osad: täielik dokumentide hostile testmaatriks, object-storage backup scheduler,
+  UI responsive/E2E testid ja audit hash-chain tamper-test.
 
 ## Tests
 
 ```text
 npm run test:ci PASS (lint, typecheck, API unit, web unit, build)
-Serveris test-DB: 52/52 PASS (sh v0.2 auth + v0.3 tenant/RLS/IDOR/pool tests)
+Serveris test-DB: 55/55 PASS (v0.2 auth + v0.3 tenant/RLS + v0.4 audit/inbox/outbox)
 Migratsioon up/down PASS
 Backup PASS, restore PASS
 ```
@@ -62,4 +66,4 @@ Backup PASS, restore PASS
 
 ## Next step
 
-v0.4 – ei alustata automaatselt.
+v0.5 – ei alustata automaatselt (v0.4 gate pole veel täielikult PASS).
