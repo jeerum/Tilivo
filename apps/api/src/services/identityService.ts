@@ -96,10 +96,19 @@ export async function verifyEmailWithToken(db: Db, rawToken: string): Promise<Us
         400,
       );
     }
-    await client.query(
-      `UPDATE email_verification_tokens SET used_at = now() WHERE id = $1`,
+    const claimed = await client.query(
+      `UPDATE email_verification_tokens SET used_at = now()
+       WHERE id = $1 AND used_at IS NULL
+       RETURNING id`,
       [token.id],
     );
+    if ((claimed.rowCount ?? 0) === 0) {
+      throw new AppError(
+        ErrorCodes.authVerificationTokenInvalid,
+        'Verification token is invalid or expired',
+        400,
+      );
+    }
     await client.query(`UPDATE users SET email_verified_at = now(), updated_at = now() WHERE id = $1`, [
       token.user_id,
     ]);
@@ -146,7 +155,19 @@ export async function resetPasswordWithToken(
         400,
       );
     }
-    await client.query(`UPDATE password_reset_tokens SET used_at = now() WHERE id = $1`, [token.id]);
+    const claimed = await client.query(
+      `UPDATE password_reset_tokens SET used_at = now()
+       WHERE id = $1 AND used_at IS NULL
+       RETURNING id`,
+      [token.id],
+    );
+    if ((claimed.rowCount ?? 0) === 0) {
+      throw new AppError(
+        ErrorCodes.authResetTokenInvalid,
+        'Password reset token is invalid or expired',
+        400,
+      );
+    }
     await client.query(
       `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`,
       [newPasswordHash, token.user_id],

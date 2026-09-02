@@ -119,24 +119,37 @@ export function totpForSecret(
   { timestamp = Date.now(), period = 30, digits = 6, algorithm = 'sha1' }: TotpOptions = {},
 ): string {
   const secretBytes = typeof secret === 'string' ? base32Decode(secret) : secret;
-  const counter = BigInt(Math.floor(timestamp / 1000 / period));
+  const counter = BigInt(totpCounterForTimestamp(timestamp, period));
   return hotp(secretBytes, counter, digits, algorithm);
 }
 
-export function verifyTotp(secret: string, code: string, options: TotpOptions = {}): boolean {
-  if (!/^\d{6}$/.test(code)) return false;
+export function totpCounterForTimestamp(timestamp: number, period = 30): number {
+  return Math.floor(timestamp / 1000 / period);
+}
+
+/**
+ * Returns the TOTP counter whose code matches, or null. Checks the current
+ * time step and the neighbouring steps to tolerate small clock drift.
+ */
+export function totpCounterForCode(secret: string, code: string, options: TotpOptions = {}): number | null {
+  if (!/^\d{6}$/.test(code)) return null;
   const timestamp = options.timestamp ?? Date.now();
   const period = options.period ?? 30;
   for (const offset of [0, -period, period]) {
-    const candidate = totpForSecret(secret, { ...options, timestamp: timestamp + offset * 1000 });
+    const candidateTime = timestamp + offset * 1000;
+    const candidate = totpForSecret(secret, { ...options, timestamp: candidateTime });
     if (constantTimeEqualHex(
       Buffer.from(candidate).toString('hex'),
       Buffer.from(code).toString('hex'),
     )) {
-      return true;
+      return totpCounterForTimestamp(candidateTime, period);
     }
   }
-  return false;
+  return null;
+}
+
+export function verifyTotp(secret: string, code: string, options: TotpOptions = {}): boolean {
+  return totpCounterForCode(secret, code, options) !== null;
 }
 
 export function otpauthUri(secret: string, accountName: string, issuer = 'Tilivo'): string {

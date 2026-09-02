@@ -490,4 +490,269 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
     );
     expect(tokens.rows[0]?.token_hash).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('rotates the session at login and marks auth responses no-store', async () => {
+    const email = await registerAndVerify();
+    const beforeLogin = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      headers: { cookie: 'tilivo_session=attacker-controlled-prefix' },
+    });
+    expect(beforeLogin.statusCode).toBe(401);
+
+    const loggedIn = await login(email);
+    expect(loggedIn.status).toBe(200);
+    expect(loggedIn.cookie).toContain('tilivo_session=');
+    expect(loggedIn.headers['cache-control']).toBe('no-store');
+
+    const me = await inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookie: loggedIn.cookie,
+      ip: '10.0.0.90',
+    });
+    expect(me.status).toBe(200);
+    expect(me.headers['cache-control']).toBe('no-store');
+  });
+
+  it('rejects a wrong CSRF token', async () => {
+    const email = await registerAndVerify();
+    const loggedIn = await login(email);
+    const result = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      cookie: loggedIn.cookie,
+      csrf: 'wrong-csrf-token',
+      ip: '10.0.0.91',
+    });
+    expect(result.status).toBe(403);
+    expect(result.body.error.code).toBe('AUTH-012');
+  });
+
+  it('does not allow revoking another users session (IDOR)', async () => {
+    const emailA = await registerAndVerify();
+    const emailB = await registerAndVerify();
+    const userA = await login(emailA);
+    const userB = await login(emailB);
+
+    const sessionsB = await inject({
+      method: 'GET',
+      url: '/api/v1/auth/sessions',
+      cookie: userB.cookie,
+      ip: '10.0.0.92',
+    });
+    const sessionBId = sessionsB.body.sessions[0].id as string;
+
+    const attack = await inject({
+      method: 'POST',
+      url: `/api/v1/auth/sessions/${sessionBId}/revoke`,
+      cookie: userA.cookie,
+      csrf: userA.body.csrf_token,
+      ip: '10.0.0.93',
+    });
+    expect(attack.status).toBe(404);
+
+    const userBStillActive = await inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookie: userB.cookie,
+      ip: '10.0.0.92',
+    });
+    expect(userBStillActive.status).toBe(200);
+  });
+
+  it('allows only one concurrent use of a verification token', async () => {
+    const email = nextEmail();
+    await inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email, password: PASSWORD },
+      ip: '10.0.0.100',
+    });
+    const token = parseTokenFromBody(await lastEmailBody(email));
+    const attempts = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        inject({
+          method: 'POST',
+          url: '/api/v1/auth/email/verify',
+          payload: { token },
+          ip: `10.0.1.${i + 10}`,
+        }),
+      ),
+    );
+    const successes = attempts.filter((attempt) => attempt.status === 200);
+    expect(successes).toHaveLength(1);
+  });
+
+  it('allows only one concurrent password reset to succeed', async () => {
+    const email = await registerAndVerify();
+    await inject({
+      method: 'POST',
+      url: '/api/v1/auth/password/forgot',
+      payload: { email },
+      ip: '10.0.0.110',
+    });
+    const token = parseTokenFromBody(await lastEmailBody(email));
+    const passwords = Array.from(
+      { length: 5 },
+      (_, i) => `race password candidate ${i} secure value`,
+    );
+    const attempts = await Promise.all(
+      passwords.map((newPassword, i) =>
+        inject({
+          method: 'POST',
+          url: '/api/v1/auth/password/reset',
+          payload: { token, new_password: newPassword },
+          ip: `10.0.2.${i + 10}`,
+        }),
+      ),
+    );
+    const successIndex = attempts.findIndex((attempt) => attempt.status === 200);
+    expect(successIndex).toBeGreaterThanOrEqual(0);
+    expect(attempts.filter((attempt) => attempt.status === 200)).toHaveLength(1);
+    const winner = await login(email, passwords[successIndex]!, {}, '10.0.2.99');
+    expect(winner.status).toBe(200);
+  });
+
+  it('prevents TOTP replay and challenge reuse from creating another session', async () => {
+    const email = await registerAndVerify();
+    const loggedIn = await login(email);
+    const setup = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/setup',
+      cookie: loggedIn.cookie,
+      csrf: loggedIn.body.csrf_token,
+      ip: '10.0.0.120',
+    });
+    const secret = setup.body.secret as string;
+    const confirm = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/confirm',
+      payload: { code: totpForSecret(secret) },
+      cookie: loggedIn.cookie,
+      csrf: loggedIn.body.csrf_token,
+      ip: '10.0.0.120',
+    });
+    expect(confirm.status).toBe(200);
+    const logout = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      cookie: loggedIn.cookie,
+      csrf: loggedIn.body.csrf_token,
+      ip: '10.0.0.120',
+    });
+    expect(logout.status).toBe(204);
+
+    const firstChallenge = await login(email, PASSWORD, {}, '10.0.0.121');
+    const firstTotpLogin = await login(
+      email,
+      PASSWORD,
+      {
+        challenge_token: firstChallenge.body.challenge_token,
+        totp_code: totpForSecret(secret),
+      },
+      '10.0.0.121',
+    );
+    expect(firstTotpLogin.status).toBe(200);
+
+    const counter = await pool.query(
+      `SELECT last_used_counter FROM totp_credentials
+       WHERE user_id = (SELECT id FROM users WHERE email_normalized = $1)`,
+      [email],
+    );
+    expect(Number(counter.rows[0]?.last_used_counter)).toBeGreaterThan(0);
+
+    const replayChallenge = await login(email, PASSWORD, {}, '10.0.0.122');
+    const replayAttempt = await login(
+      email,
+      PASSWORD,
+      {
+        challenge_token: replayChallenge.body.challenge_token,
+        totp_code: totpForSecret(secret),
+      },
+      '10.0.0.122',
+    );
+    expect(replayAttempt.status).toBe(401);
+
+    const reuseAttempt = await login(
+      email,
+      PASSWORD,
+      {
+        challenge_token: firstChallenge.body.challenge_token,
+        totp_code: totpForSecret(secret),
+      },
+      '10.0.0.123',
+    );
+    expect(reuseAttempt.status).not.toBe(200);
+  });
+
+  it('allows only one concurrent use of a recovery code', async () => {
+    const email = await registerAndVerify();
+    const loggedIn = await login(email, PASSWORD, {}, '10.0.0.130');
+    const setup = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/setup',
+      cookie: loggedIn.cookie,
+      csrf: loggedIn.body.csrf_token,
+      ip: '10.0.0.130',
+    });
+    const secret = setup.body.secret as string;
+    const confirm = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/confirm',
+      payload: { code: totpForSecret(secret) },
+      cookie: loggedIn.cookie,
+      csrf: loggedIn.body.csrf_token,
+      ip: '10.0.0.130',
+    });
+    expect(confirm.status).toBe(200);
+    const recoveryCode = (confirm.body.recovery_codes as string[])[0]!;
+    const logout = await inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      cookie: loggedIn.cookie,
+      csrf: loggedIn.body.csrf_token,
+      ip: '10.0.0.130',
+    });
+    expect(logout.status).toBe(204);
+
+    const challenges: Array<{ token: string; ip: string }> = [];
+    for (let i = 0; i < 6; i += 1) {
+      const challenge = await login(email, PASSWORD, {}, `10.0.1.${140 + i}`);
+      expect(challenge.status).toBe(200);
+      challenges.push({
+        token: challenge.body.challenge_token as string,
+        ip: `10.0.1.${140 + i}`,
+      });
+    }
+
+    const attempts = await Promise.all(
+      challenges.map((challenge) =>
+        inject({
+          method: 'POST',
+          url: '/api/v1/auth/login',
+          payload: {
+            email,
+            password: PASSWORD,
+            challenge_token: challenge.token,
+            recovery_code: recoveryCode,
+          },
+          ip: challenge.ip,
+        }),
+      ),
+    );
+    expect(attempts.filter((attempt) => attempt.status === 200)).toHaveLength(1);
+
+    const newChallenge = await login(email, PASSWORD, {}, '10.0.1.150');
+    const reuse = await login(
+      email,
+      PASSWORD,
+      {
+        challenge_token: newChallenge.body.challenge_token,
+        recovery_code: recoveryCode,
+      },
+      '10.0.1.150',
+    );
+    expect(reuse.status).toBe(401);
+  });
 });

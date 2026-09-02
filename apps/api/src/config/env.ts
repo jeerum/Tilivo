@@ -31,6 +31,10 @@ const AppEnvSchema = z.object({
   COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
   SESSION_COOKIE_NAME: z.string().min(1).default('tilivo_session'),
   CSRF_COOKIE_NAME: z.string().min(1).default('tilivo_csrf'),
+  TRUST_PROXY_CIDRS: z
+    .string()
+    .min(1)
+    .default('loopback,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16'),
   EMAIL_DRIVER: z.enum(emailDrivers).default('noop'),
   EMAIL_DEV_OUTBOX: z.preprocess((value) => toBoolean(value, false), z.boolean()),
   TOTP_ENCRYPTION_KEY: z.string().default(''),
@@ -57,6 +61,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const config = parsed.data;
+  if (config.NODE_ENV !== 'development' && config.NODE_ENV !== 'test') {
+    if (env.COOKIE_SECURE === undefined) {
+      config.COOKIE_SECURE = true;
+    }
+    if (config.EMAIL_DRIVER === 'dev' || config.EMAIL_DEV_OUTBOX) {
+      throw new ConfigError('EMAIL_DRIVER=dev / EMAIL_DEV_OUTBOX are only allowed in development/test');
+    }
+  }
   const totpKey = config.TOTP_ENCRYPTION_KEY;
   if (config.NODE_ENV !== 'test' && config.NODE_ENV !== 'development') {
     if (totpKey.length < 64) {

@@ -48,6 +48,7 @@ import {
   getPendingTotp,
   replaceRecoveryCodes,
   startTotpSetup,
+  verifyTotpWithReplay,
 } from '../services/twoFactorService';
 
 interface AuthRouteOptions {
@@ -87,6 +88,10 @@ const NO_CSRF_PATHS = new Set([
   '/api/v1/auth/password/reset',
   '/api/v1/auth/email/verify',
 ]);
+
+// Pre-computed in the background so that a login for a non-existent account
+// costs a password verification too (timing side-channel mitigation).
+const dummyArgonHashPromise = hashPassword('tilivo-timing-equalizer-not-a-real-password-2026');
 
 function validateEmail(email: string): string {
   if (!email || !isValidEmail(email)) {
@@ -244,6 +249,12 @@ async function assertNotRateLimited(
 export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions): Promise<void> {
   const { db, emailProvider, config } = options;
 
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.url.startsWith('/api/v1/auth/')) {
+      reply.header('Cache-Control', 'no-store');
+    }
+  });
+
   app.addHook('onRequest', async (request) => {
     const method = request.method.toUpperCase();
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
@@ -272,6 +283,7 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
       const password = validatePassword(request.body?.password ?? '');
       await assertNotRateLimited(db, request, 'register', email);
 
+      const passwordHash = await hashPassword(password);
       const existing = await findUserByEmail(db, email);
       if (existing) {
         // Deliberately generic response for both new and existing accounts.
@@ -284,7 +296,6 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
         return reply.code(202).send({ message: 'Registration accepted. Check your email.' });
       }
 
-      const passwordHash = await hashPassword(password);
       try {
         const user = await createUser(db, {
           email,
@@ -354,6 +365,7 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
 
       const user = await findUserByEmail(db, email);
       if (!user || user.status === 'DISABLED') {
+        await verifyPassword(password, await dummyArgonHashPromise);
         await recordAuthAttempt(db, {
           purpose: 'login',
           emailNormalized: email,
@@ -408,10 +420,12 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
         let twoFactorOk = false;
         let usedRecovery = false;
         if (credential && totpCode) {
+          await assertNotRateLimited(db, request, 'totp', email);
           const secret = decryptSecret(credential.secretEncrypted, config.TOTP_ENCRYPTION_KEY);
-          twoFactorOk = verifyTotp(secret, validateTotpCode(totpCode));
+          twoFactorOk = await verifyTotpWithReplay(db, user.id, secret, validateTotpCode(totpCode));
         }
         if (!twoFactorOk && recoveryCode) {
+          await assertNotRateLimited(db, request, 'recovery_code', email);
           usedRecovery = await consumeRecoveryCode(db, user.id, recoveryCode.toUpperCase());
           twoFactorOk = usedRecovery;
         }
@@ -429,7 +443,15 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
             401,
           );
         }
-        await db.query(`UPDATE two_factor_challenges SET used_at = now() WHERE id = $1`, [challenge.id]);
+        const claimed = await db.query(
+          `UPDATE two_factor_challenges SET used_at = now()
+           WHERE id = $1 AND used_at IS NULL
+           RETURNING id`,
+          [challenge.id],
+        );
+        if ((claimed.rowCount ?? 0) === 0) {
+          throw new AppError(ErrorCodes.authInvalidRequest, 'Login challenge is invalid', 400);
+        }
         if (usedRecovery) {
           await writeAuditEvent(db, 'AUTH.RECOVERY_CODE_USED', request, { userId: user.id });
         }
@@ -512,7 +534,10 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
     '/api/v1/auth/sessions/:id/revoke',
     async (request, reply) => {
       const { session } = await getCurrentSession(db, request, config);
-      await revokeSessionById(db, request.params.id, session.userId);
+      const revoked = await revokeSessionById(db, request.params.id, session.userId);
+      if (!revoked) {
+        throw new AppError(ErrorCodes.notFound, 'Session not found', 404);
+      }
       await writeAuditEvent(db, 'AUTH.SESSION_REVOKED', request, { userId: session.userId });
       return reply.code(204).send();
     },
@@ -635,7 +660,9 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
       }
       const code = request.body?.code ?? '';
       const secret = decryptSecret(credential.secretEncrypted, config.TOTP_ENCRYPTION_KEY);
-      const ok = verifyTotp(secret, code) || (await consumeRecoveryCode(db, user.id, code.toUpperCase()));
+      const ok =
+        (await verifyTotpWithReplay(db, user.id, secret, code)) ||
+        (await consumeRecoveryCode(db, user.id, code.toUpperCase()));
       if (!ok) {
         await writeAuditEvent(db, 'AUTH.2FA_FAILED', request, { userId: user.id });
         throw new AppError(ErrorCodes.authTwoFactorInvalid, 'Invalid code', 401);
@@ -658,7 +685,7 @@ export async function authRoutes(app: FastifyInstance, options: AuthRouteOptions
       }
       const code = validateTotpCode(request.body?.code ?? '');
       const secret = decryptSecret(credential.secretEncrypted, config.TOTP_ENCRYPTION_KEY);
-      if (!verifyTotp(secret, code)) {
+      if (!(await verifyTotpWithReplay(db, user.id, secret, code))) {
         await writeAuditEvent(db, 'AUTH.2FA_FAILED', request, { userId: user.id });
         throw new AppError(ErrorCodes.authTwoFactorInvalid, 'Invalid TOTP code', 401);
       }

@@ -98,12 +98,13 @@ export async function updateSessionSeen(db: Queryable, sessionId: string): Promi
   );
 }
 
-export async function revokeSessionById(db: Queryable, sessionId: string, userId: string): Promise<void> {
-  await db.query(
+export async function revokeSessionById(db: Queryable, sessionId: string, userId: string): Promise<boolean> {
+  const result = await db.query(
     `UPDATE sessions SET revoked_at = now()
      WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
     [sessionId, userId],
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function revokeOtherSessions(db: Queryable, userId: string, keepSessionId: string): Promise<void> {

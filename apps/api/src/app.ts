@@ -40,7 +40,7 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
     requestIdHeader: 'x-trace-id',
     logController: new LogController({ requestIdLogLabel: 'trace_id' }),
     genReqId: () => crypto.randomUUID(),
-    trustProxy: true,
+    trustProxy: config.TRUST_PROXY_CIDRS.split(','),
   });
 
   await app.register(helmet, {

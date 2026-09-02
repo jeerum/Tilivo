@@ -1,6 +1,6 @@
 import type { Queryable } from '../db/pool';
 import { AppError, ErrorCodes } from '../lib/errors';
-import { hashToken } from '../lib/security';
+import { hashToken, totpCounterForCode } from '../lib/security';
 
 export interface TotpCredential {
   id: string;
@@ -89,6 +89,31 @@ export async function consumeRecoveryCode(db: Queryable, userId: string, rawCode
     `UPDATE recovery_codes SET used_at = now()
      WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL`,
     [userId, hash],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Verifies a TOTP code and atomically advances replay protection. Only the
+ * first use of a code for a given time counter succeeds.
+ */
+export async function verifyTotpWithReplay(
+  db: Queryable,
+  userId: string,
+  secret: string,
+  code: string,
+): Promise<boolean> {
+  const counter = totpCounterForCode(secret, code);
+  if (counter === null) return false;
+  const result = await db.query(
+    `UPDATE totp_credentials
+     SET last_used_counter = GREATEST(last_used_counter, $2),
+         last_used_at = now()
+     WHERE user_id = $1
+       AND confirmed_at IS NOT NULL
+       AND (last_used_counter IS NULL OR last_used_counter < $2)
+     RETURNING id`,
+    [userId, counter],
   );
   return (result.rowCount ?? 0) > 0;
 }
