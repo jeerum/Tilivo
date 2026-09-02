@@ -1,0 +1,91 @@
+name: mrjkp
+
+services:
+  accounting-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mrjkp_accounting}
+      POSTGRES_USER: ${POSTGRES_USER:-mrjkp_accounting_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - mrjkp-accounting-db-data:/var/lib/postgresql/data
+    networks:
+      - mrjkp-accounting
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  accounting-api:
+    build:
+      context: ./apps/api
+      target: prod
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@accounting-db:5432/${POSTGRES_DB}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      EXPOSE_DOCS: ${EXPOSE_DOCS:-false}
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-3100}:3000"
+    depends_on:
+      accounting-db:
+        condition: service_healthy
+    networks:
+      - mrjkp-accounting
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  accounting-web:
+    build:
+      context: ./apps/web
+      target: prod
+    restart: unless-stopped
+    depends_on:
+      accounting-api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3101}:80"
+    networks:
+      - mrjkp-accounting
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  accounting-test:
+    profiles: ["test"]
+    build:
+      context: ./apps/api
+      target: test
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@accounting-db:5432/mrjkp_accounting_test
+      TEST_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@accounting-db:5432/mrjkp_accounting_test
+      LOG_LEVEL: silent
+    command: ["sh", "-c", "node dist/migrate.js up && npm test"]
+    depends_on:
+      accounting-db:
+        condition: service_healthy
+    networks:
+      - mrjkp-accounting
+
+volumes:
+  mrjkp-accounting-db-data:
+    name: mrjkp-accounting-db-data
+
+networks:
+  mrjkp-accounting:
+    name: mrjkp-accounting
+

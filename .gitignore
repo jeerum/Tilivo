@@ -1,0 +1,26 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local environment files. Never commit real secrets.
+.env
+.env.*
+!.env.example
+
+# Server access / credentials documentation must never enter the repo.
+server.md
+server.local.md
+
+# Deploy artifacts and temp files
+*.tar.gz
+tmp_*.sh
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
