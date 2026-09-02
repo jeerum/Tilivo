@@ -506,3 +506,280 @@ export async function listCurrencies(pool: Db): Promise<any[]> {
   );
   return result.rows;
 }
+
+export async function listJournals(
+  pool: Db,
+  tenantId: string,
+  filters: { status?: string; from?: string; to?: string; limit?: number; offset?: number } = {},
+): Promise<{ journals: any[]; total: number }> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [tenantId];
+    if (filters.status) {
+      values.push(filters.status);
+      clauses.push(`status = $${values.length}`);
+    }
+    if (filters.from) {
+      values.push(filters.from);
+      clauses.push(`business_date >= $${values.length}::date`);
+    }
+    if (filters.to) {
+      values.push(filters.to);
+      clauses.push(`business_date <= $${values.length}::date`);
+    }
+    const where = `WHERE tenant_id = $1${clauses.length ? ` AND ${clauses.join(' AND ')}` : ''}`;
+    const totalResult = await client.query(`SELECT count(*)::int AS total FROM journal_entries ${where}`, values);
+    const limit = filters.limit ?? 100;
+    const offset = filters.offset ?? 0;
+    const pageValues = [...values, limit, offset];
+    const entries = await client.query(
+      `SELECT id, entry_number, business_date, posting_date, description, status, currency_code,
+              source_type, source_id, reversal_of_entry_id, reversed_by_entry_id,
+              created_by, posted_by, created_at, posted_at
+       FROM journal_entries
+       ${where}
+       ORDER BY business_date DESC, entry_number DESC NULLS LAST, created_at DESC
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      pageValues,
+    );
+    if (entries.rows.length === 0) {
+      return { journals: [], total: Number(totalResult.rows[0]!.total) };
+    }
+    const entryIds = entries.rows.map((row: any) => String(row.id));
+    const lines = await client.query(
+      `SELECT l.journal_entry_id, l.line_number, l.account_id, a.code AS account_code,
+              a.name AS account_name, l.description, l.debit, l.credit, l.currency_code,
+              l.tax_code_id, l.applied_tax_rate, l.tax_snapshot
+       FROM journal_lines l
+       JOIN accounts a ON a.id = l.account_id AND a.tenant_id = l.tenant_id
+       WHERE l.journal_entry_id = ANY($1::uuid[])
+       ORDER BY l.line_number`,
+      [entryIds],
+    );
+    const linesByEntry = new Map<string, any[]>();
+    for (const row of lines.rows) {
+      const key = String(row.journal_entry_id);
+      const list = linesByEntry.get(key) ?? [];
+      list.push(row);
+      linesByEntry.set(key, list);
+    }
+    const journals = entries.rows.map((row: any) => ({
+      ...row,
+      id: String(row.id),
+      lines: linesByEntry.get(String(row.id)) ?? [],
+    }));
+    return { journals, total: Number(totalResult.rows[0]!.total) };
+  });
+}
+
+export async function getJournal(pool: Db, tenantId: string, journalId: string): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const entry = await client.query(
+      `SELECT id, entry_number, business_date, posting_date, description, status, currency_code,
+              source_type, source_id, reversal_of_entry_id, reversed_by_entry_id,
+              created_by, posted_by, created_at, posted_at
+       FROM journal_entries
+       WHERE id = $1 AND tenant_id = $2`,
+      [journalId, tenantId],
+    );
+    if (!entry.rows[0]) throw new AppError(ErrorCodes.journalNotFound, 'Journal not found', 404);
+    const lines = await client.query(
+      `SELECT l.line_number, l.account_id, a.code AS account_code, a.name AS account_name,
+              l.description, l.debit, l.credit, l.currency_code, l.tax_code_id,
+              l.applied_tax_rate, l.tax_snapshot
+       FROM journal_lines l
+       JOIN accounts a ON a.id = l.account_id AND a.tenant_id = l.tenant_id
+       WHERE l.journal_entry_id = $1
+       ORDER BY l.line_number`,
+      [journalId],
+    );
+    return { ...entry.rows[0], id: String(entry.rows[0]!.id), lines: lines.rows };
+  });
+}
+
+export async function ledgerLines(
+  pool: Db,
+  tenantId: string,
+  filters: { from?: string; to?: string; accountId?: string; limit?: number; offset?: number } = {},
+): Promise<{ rows: any[]; debitTotal: string; creditTotal: string; total: number }> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [tenantId];
+    if (filters.from) {
+      values.push(filters.from);
+      clauses.push(`je.business_date >= $${values.length}::date`);
+    }
+    if (filters.to) {
+      values.push(filters.to);
+      clauses.push(`je.business_date <= $${values.length}::date`);
+    }
+    if (filters.accountId) {
+      values.push(filters.accountId);
+      clauses.push(`l.account_id = $${values.length}`);
+    }
+    const where = `WHERE je.tenant_id = $1 AND je.status = 'POSTED'${clauses.length ? ` AND ${clauses.join(' AND ')}` : ''}`;
+
+    const totals = await client.query(
+      `SELECT COALESCE(sum(l.debit), 0)::text AS debit_total,
+              COALESCE(sum(l.credit), 0)::text AS credit_total
+       FROM journal_lines l
+       JOIN journal_entries je ON je.id = l.journal_entry_id
+       ${where}`,
+      values,
+    );
+    const totalResult = await client.query(
+      `SELECT count(*)::int AS total FROM journal_lines l
+       JOIN journal_entries je ON je.id = l.journal_entry_id
+       ${where}`,
+      values,
+    );
+    const limit = filters.limit ?? 200;
+    const offset = filters.offset ?? 0;
+    const pageValues = [...values, limit, offset];
+    const rows = await client.query(
+      `SELECT l.id, l.journal_entry_id AS entry_id, je.entry_number, je.business_date,
+              je.posting_date, je.description, l.line_number, l.account_id,
+              a.code AS account_code, a.name AS account_name,
+              l.debit, l.credit, l.currency_code
+       FROM journal_lines l
+       JOIN journal_entries je ON je.id = l.journal_entry_id
+       JOIN accounts a ON a.id = l.account_id AND a.tenant_id = l.tenant_id
+       ${where}
+       ORDER BY je.business_date, je.entry_number, l.line_number
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      pageValues,
+    );
+    return {
+      rows: rows.rows,
+      debitTotal: String(totals.rows[0]!.debit_total),
+      creditTotal: String(totals.rows[0]!.credit_total),
+      total: Number(totalResult.rows[0]!.total),
+    };
+  });
+}
+
+export async function accountLedger(
+  pool: Db,
+  tenantId: string,
+  accountId: string,
+  filters: { from?: string; to?: string } = {},
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const account = await client.query(
+      `SELECT id, code, name, type, normal_balance
+       FROM accounts WHERE id = $1 AND tenant_id = $2`,
+      [accountId, tenantId],
+    );
+    if (!account.rows[0]) throw new AppError(ErrorCodes.accountNotFound, 'Account not found', 404);
+
+    const beforeValues: unknown[] = [tenantId, accountId];
+    let beforeClause = '';
+    if (filters.from) {
+      beforeValues.push(filters.from);
+      beforeClause = ` AND je.business_date < $3::date`;
+    }
+    const before = await client.query(
+      `SELECT COALESCE(sum(l.debit - l.credit), 0)::text AS balance
+       FROM journal_lines l
+       JOIN journal_entries je ON je.id = l.journal_entry_id
+       WHERE l.tenant_id = $1 AND l.account_id = $2 AND je.status = 'POSTED'${beforeClause}`,
+      beforeValues,
+    );
+    const balanceBefore = new Decimal(String(before.rows[0]!.balance));
+
+    const rangeValues: unknown[] = [tenantId, accountId];
+    const rangeClauses: string[] = [];
+    if (filters.from) {
+      rangeValues.push(filters.from);
+      rangeClauses.push(`je.business_date >= $${rangeValues.length}::date`);
+    }
+    if (filters.to) {
+      rangeValues.push(filters.to);
+      rangeClauses.push(`je.business_date <= $${rangeValues.length}::date`);
+    }
+    const rangeWhere = rangeClauses.length ? ` AND ${rangeClauses.join(' AND ')}` : '';
+    const rows = await client.query(
+      `SELECT l.id, je.entry_number, je.business_date, je.posting_date, je.description,
+              l.line_number, l.debit, l.credit
+       FROM journal_lines l
+       JOIN journal_entries je ON je.id = l.journal_entry_id
+       WHERE l.tenant_id = $1 AND l.account_id = $2 AND je.status = 'POSTED'${rangeWhere}
+       ORDER BY je.business_date, je.entry_number, l.line_number`,
+      rangeValues,
+    );
+
+    let running = balanceBefore;
+    let debitTotal = new Decimal(0);
+    let creditTotal = new Decimal(0);
+    const items = rows.rows.map((row: any) => {
+      const debit = new Decimal(String(row.debit));
+      const credit = new Decimal(String(row.credit));
+      debitTotal = debitTotal.plus(debit);
+      creditTotal = creditTotal.plus(credit);
+      running = running.plus(debit).minus(credit);
+      return { ...row, running_balance: running.toString() };
+    });
+    const closing = balanceBefore.plus(debitTotal).minus(creditTotal);
+    return {
+      account: account.rows[0],
+      balance_before: balanceBefore.toString(),
+      total_debit: debitTotal.toString(),
+      total_credit: creditTotal.toString(),
+      closing_balance: closing.toString(),
+      rows: items,
+    };
+  });
+}
+
+export async function trialBalance(
+  pool: Db,
+  tenantId: string,
+  asOf?: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      `SELECT a.id AS account_id, a.code, a.name, a.type, a.normal_balance,
+              COALESCE(sum(l.debit), 0)::text AS debit_total,
+              COALESCE(sum(l.credit), 0)::text AS credit_total
+       FROM accounts a
+       JOIN journal_lines l ON l.account_id = a.id AND l.tenant_id = a.tenant_id
+       JOIN journal_entries je ON je.id = l.journal_entry_id
+       WHERE a.tenant_id = $1 AND je.status = 'POSTED'
+         AND ($2::date IS NULL OR je.business_date <= $2::date)
+       GROUP BY a.id
+       ORDER BY a.code`,
+      [tenantId, asOf ?? null],
+    );
+    let totalDebitColumn = new Decimal(0);
+    let totalCreditColumn = new Decimal(0);
+    const rows = result.rows.map((row: any) => {
+      const debit = new Decimal(String(row.debit_total));
+      const credit = new Decimal(String(row.credit_total));
+      const normalIsDebit = String(row.normal_balance) === 'DEBIT';
+      // Positive signed balance belongs to the account's normal side; a
+      // negative one is shown on the opposite side as an abnormal balance.
+      const signed = normalIsDebit ? debit.minus(credit) : credit.minus(debit);
+      const ownBalance = signed.greaterThan(0) ? signed : new Decimal(0);
+      const oppositeBalance = signed.lessThan(0) ? signed.negated() : new Decimal(0);
+      const debitBalance = normalIsDebit ? ownBalance : oppositeBalance;
+      const creditBalance = normalIsDebit ? oppositeBalance : ownBalance;
+      totalDebitColumn = totalDebitColumn.plus(debitBalance);
+      totalCreditColumn = totalCreditColumn.plus(creditBalance);
+      return {
+        ...row,
+        debit_total: debit.toString(),
+        credit_total: credit.toString(),
+        debit_balance: debitBalance.toString(),
+        credit_balance: creditBalance.toString(),
+      };
+    });
+    const debitTotal = totalDebitColumn.toString();
+    const creditTotal = totalCreditColumn.toString();
+    return {
+      as_of: asOf ?? null,
+      rows,
+      totals: { debit: debitTotal, credit: creditTotal },
+      balanced: totalDebitColumn.equals(totalCreditColumn),
+    };
+  });
+}

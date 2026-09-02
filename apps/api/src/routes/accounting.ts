@@ -4,18 +4,23 @@ import type { AppConfig } from '../config/env';
 import type { Db } from '../db/pool';
 import { AppError, ErrorCodes } from '../lib/errors';
 import {
+  accountLedger,
   convertCurrency,
   createJournalDraft,
   createFxRate,
   createTaxCode,
   deleteFxRate,
+  getJournal,
+  ledgerLines,
   listCurrencies,
   listFxRates,
+  listJournals,
   listTaxCodes,
   postJournal,
   reopenPeriod,
   reverseJournal,
   setPeriodStatus,
+  trialBalance,
   updateFxRate,
   updateTaxCode,
 } from '../services/accountingService';
@@ -165,6 +170,34 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       })),
     });
     return reply.code(201).send({ journal_id: id, status: 'DRAFT' });
+  });
+
+  app.get('/api/v1/journals', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'accounting.read');
+    const query = request.query as { status?: string; from?: string; to?: string; limit?: string; offset?: string };
+    const status = query.status ? String(query.status).toUpperCase() : undefined;
+    if (status && !['DRAFT', 'POSTED', 'REVERSED'].includes(status)) {
+      throw new AppError(ErrorCodes.invalidRequest, 'Invalid journal status filter', 400);
+    }
+    const range = parseDateRange({ from: query.from, to: query.to });
+    const limit = Math.min(Math.max(Number(query.limit ?? 100) || 100, 1), 500);
+    const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+    const result = await listJournals(db, tenantId, {
+      status,
+      from: range.from,
+      to: range.to,
+      limit,
+      offset,
+    });
+    return { journals: result.journals, total: result.total };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/journals/:id', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'accounting.read');
+    const journal = await getJournal(db, tenantId, request.params.id);
+    return { journal };
   });
 
   app.get('/api/v1/currencies', async (request) => {
@@ -364,20 +397,54 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
   app.get('/api/v1/ledger', async (request) => {
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'accounting.read');
-    const limit = Math.min(Number((request.query as { limit?: string }).limit ?? 100), 500);
-    const result = await withTenantTransaction(db, tenantId, (client) =>
-      client.query(
-        `SELECT je.id, je.entry_number, je.business_date, je.description, l.line_number,
-                a.code AS account_code, l.debit, l.credit
-         FROM journal_entries je
-         JOIN journal_lines l ON l.journal_entry_id = je.id
-         JOIN accounts a ON a.id = l.account_id
-         WHERE je.status = 'POSTED'
-         ORDER BY je.business_date DESC, je.entry_number DESC
-         LIMIT $1`,
-        [limit],
-      ),
-    );
-    return { ledger: result.rows };
+    const query = request.query as {
+      from?: string;
+      to?: string;
+      account_id?: string;
+      limit?: string;
+      offset?: string;
+    };
+    const range = parseDateRange({ from: query.from, to: query.to });
+    const accountId = query.account_id ? String(query.account_id).toLowerCase() : undefined;
+    if (accountId && !UUID.test(accountId)) {
+      throw new AppError(ErrorCodes.accountNotFound, 'Valid account id required', 400);
+    }
+    const limit = Math.min(Math.max(Number(query.limit ?? 200) || 200, 1), 500);
+    const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+    const result = await ledgerLines(db, tenantId, {
+      from: range.from,
+      to: range.to,
+      accountId,
+      limit,
+      offset,
+    });
+    return {
+      ledger: result.rows,
+      summary: { debit: result.debitTotal, credit: result.creditTotal },
+      total: result.total,
+    };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/accounts/:id/ledger', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'accounting.read');
+    const accountId = request.params.id.toLowerCase();
+    if (!UUID.test(accountId)) throw new AppError(ErrorCodes.accountNotFound, 'Valid account id required', 400);
+    const query = request.query as { from?: string; to?: string };
+    const range = parseDateRange({ from: query.from, to: query.to });
+    const result = await accountLedger(db, tenantId, accountId, { from: range.from, to: range.to });
+    return result;
+  });
+
+  app.get('/api/v1/reports/trial-balance', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'accounting.read');
+    const query = request.query as { as_of?: string };
+    const asOf = query.as_of === undefined ? undefined : String(query.as_of);
+    if (asOf !== undefined && !DATE_RE.test(asOf)) {
+      throw new AppError(ErrorCodes.invalidRequest, 'Invalid as_of date', 400);
+    }
+    const report = await trialBalance(db, tenantId, asOf);
+    return report;
   });
 }

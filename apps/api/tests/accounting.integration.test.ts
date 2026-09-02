@@ -939,4 +939,207 @@ describe.skipIf(!databaseUrl)('v0.5 accounting core', () => {
     });
     expect(afterDelete.body.fx_rates).toHaveLength(0);
   });
+
+  it('serves completed journal, ledger, account ledger and trial balance views', async () => {
+    const auth = await setupTenant('10.0.30.90', 'Ledger Oy');
+    const accounts = await standardAccounts(auth);
+    await createOpenYearPeriod(auth, 2026);
+
+    const openingId = await createDraft(
+      auth,
+      '2026-01-10',
+      'Opening entry',
+      [
+        { account_id: accounts.asset, debit: '1250.00' },
+        { account_id: accounts.revenue, credit: '1250.00' },
+      ],
+    );
+    await postJournal(pool, auth.tenantId, openingId, auth.userId);
+
+    const transferId = await createDraft(
+      auth,
+      '2026-02-20',
+      'Transfer to cash',
+      [
+        { account_id: accounts.asset, debit: '500.00' },
+        { account_id: accounts.bank, credit: '500.00' },
+      ],
+    );
+    await postJournal(pool, auth.tenantId, transferId, auth.userId);
+
+    const draftId = await createDraft(
+      auth,
+      '2026-03-05',
+      'Unposted draft',
+      [
+        { account_id: accounts.expense, debit: '10' },
+        { account_id: accounts.bank, credit: '10' },
+      ],
+    );
+
+    const list = await request({
+      method: 'GET',
+      url: '/api/v1/journals',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(list.status).toBe(200);
+    expect(list.body.total).toBe(3);
+    const postedList = await request({
+      method: 'GET',
+      url: '/api/v1/journals?status=POSTED&from=2026-01-01&to=2026-12-31',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(postedList.body.total).toBe(2);
+    const firstPosted = postedList.body.journals[0] as { id: string; lines: unknown[] };
+    expect(firstPosted.lines).toHaveLength(2);
+
+    const detail = await request({
+      method: 'GET',
+      url: `/api/v1/journals/${openingId}`,
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(detail.status).toBe(200);
+    expect(detail.body.journal.status).toBe('POSTED');
+    expect(detail.body.journal.lines).toHaveLength(2);
+    expect(String(detail.body.journal.entry_number)).toMatch(/^2026-\d{6}$/);
+
+    const missing = await request({
+      method: 'GET',
+      url: '/api/v1/journals/00000000-0000-4000-8000-000000000000',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error.code).toBe(ErrorCodes.journalNotFound);
+
+    const ledger = await request({
+      method: 'GET',
+      url: '/api/v1/ledger',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(ledger.status).toBe(200);
+    expect(ledger.body.total).toBe(4);
+    expect(Number(ledger.body.summary.debit)).toBe(1750);
+    expect(Number(ledger.body.summary.credit)).toBe(1750);
+
+    const accountFiltered = await request({
+      method: 'GET',
+      url: `/api/v1/ledger?account_id=${accounts.asset}`,
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(accountFiltered.body.total).toBe(2);
+    expect(Number(accountFiltered.body.summary.debit)).toBe(1750);
+
+    const dateFiltered = await request({
+      method: 'GET',
+      url: '/api/v1/ledger?from=2026-02-01',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(dateFiltered.body.total).toBe(2);
+    expect(Number(dateFiltered.body.summary.debit)).toBe(500);
+    expect(Number(dateFiltered.body.summary.credit)).toBe(500);
+
+    const assetLedger = await request({
+      method: 'GET',
+      url: `/api/v1/accounts/${accounts.asset}/ledger?from=2026-02-01&to=2026-12-31`,
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(assetLedger.status).toBe(200);
+    expect(assetLedger.body.account.code).toBe('1000');
+    expect(Number(assetLedger.body.balance_before)).toBe(1250);
+    expect(assetLedger.body.rows).toHaveLength(1);
+    expect(Number(assetLedger.body.rows[0]!.debit)).toBe(500);
+    expect(Number(assetLedger.body.rows[0]!.running_balance)).toBe(1750);
+    expect(Number(assetLedger.body.closing_balance)).toBe(1750);
+
+    const missingAccountLedger = await request({
+      method: 'GET',
+      url: '/api/v1/accounts/00000000-0000-4000-8000-000000000000/ledger',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(missingAccountLedger.status).toBe(404);
+    expect(missingAccountLedger.body.error.code).toBe(ErrorCodes.accountNotFound);
+
+    const trialBalance = await request({
+      method: 'GET',
+      url: '/api/v1/reports/trial-balance',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(trialBalance.status).toBe(200);
+    expect(trialBalance.body.balanced).toBe(true);
+    expect(Number(trialBalance.body.totals.debit)).toBe(1750);
+    expect(Number(trialBalance.body.totals.credit)).toBe(1750);
+    const tbAccounts = (trialBalance.body.rows as Array<{ code: string; debit_balance: string; credit_balance: string }>).map(
+      (r) => ({ code: r.code, debit: Number(r.debit_balance), credit: Number(r.credit_balance) }),
+    );
+    expect(tbAccounts.find((r) => r.code === '1000')?.debit).toBe(1750);
+    expect(tbAccounts.find((r) => r.code === '3000')?.credit).toBe(1250);
+    expect(tbAccounts.find((r) => r.code === '1100')?.credit).toBe(500);
+
+    const earlyTb = await request({
+      method: 'GET',
+      url: '/api/v1/reports/trial-balance?as_of=2026-01-31',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(earlyTb.body.balanced).toBe(true);
+    expect(Number(earlyTb.body.totals.debit)).toBe(1250);
+    expect(Number(earlyTb.body.totals.credit)).toBe(1250);
+
+    const reversal = await request({
+      method: 'POST',
+      url: `/api/v1/journals/${openingId}/reverse`,
+      body: { reason: 'Opening entry was not needed' },
+      cookie: auth.cookie,
+      csrf: auth.csrf,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(reversal.status).toBe(200);
+
+    const afterReversalTb = await request({
+      method: 'GET',
+      url: '/api/v1/reports/trial-balance',
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(afterReversalTb.status).toBe(200);
+    expect(afterReversalTb.body.balanced).toBe(true);
+    expect(Number(afterReversalTb.body.totals.debit)).toBe(Number(afterReversalTb.body.totals.credit));
+
+    // The draft never leaks into posted views.
+    const draftDetail = await request({
+      method: 'GET',
+      url: `/api/v1/journals/${draftId}`,
+      cookie: auth.cookie,
+      tenantId: auth.tenantId,
+      ip: '10.0.30.90',
+    });
+    expect(draftDetail.body.journal.status).toBe('DRAFT');
+    const draftInLedger = (ledger.body.ledger as Array<{ entry_id: string }>).some(
+      (row) => row.entry_id === draftId,
+    );
+    expect(draftInLedger).toBe(false);
+  });
 });
