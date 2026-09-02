@@ -97,7 +97,7 @@ services:
       EMAIL_DEV_OUTBOX: "true"
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
       COOKIE_SECURE: "false"
-    command: ["sh", "-c", "node dist/migrate.js up && npm test"]
+    command: ["sh", "-c", "node dist/migrate.js up && npm test $${TEST_FILTER:+-- $$TEST_FILTER}"]
     depends_on:
       tilivo-db:
         condition: service_healthy

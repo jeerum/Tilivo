@@ -18,6 +18,13 @@ export const TENANT_PERMISSIONS = [
   'document.read',
   'document.upload',
   'document.manage',
+  'accounting.read',
+  'journal.create',
+  'journal.post',
+  'journal.reverse',
+  'period.manage',
+  'period.reopen',
+  'chart.manage',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -48,6 +55,13 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'document.read',
       'document.upload',
       'document.manage',
+      'accounting.read',
+      'journal.create',
+      'journal.post',
+      'journal.reverse',
+      'period.manage',
+      'period.reopen',
+      'chart.manage',
     ],
   },
   {
@@ -60,6 +74,9 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'audit.read',
       'document.read',
       'document.upload',
+      'accounting.read',
+      'journal.create',
+      'journal.post',
     ],
   },
   {
