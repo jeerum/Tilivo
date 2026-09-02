@@ -35,6 +35,9 @@ docker compose up -d --build tilivo-api tilivo-web
 echo "==> migrations"
 docker compose run --rm --no-deps tilivo-api node dist/migrate.js up
 
+echo "==> up worker"
+docker compose up -d tilivo-worker
+
 echo "==> smoke tests"
 for _ in $(seq 1 30); do
   if curl -fsS "http://127.0.0.1:${API_HOST_PORT:-3100}/api/v1/health" >/dev/null 2>&1; then

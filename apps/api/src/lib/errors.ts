@@ -27,6 +27,12 @@ export const ErrorCodes = {
   memberPermissionDenied: 'MEMBER-003',
   roleInvalid: 'ROLE-001',
   rolePermissionDenied: 'ROLE-002',
+  documentInvalid: 'DOC-001',
+  documentTooLarge: 'DOC-002',
+  documentNotFound: 'DOC-003',
+  auditNotFound: 'AUDIT-001',
+  inboxDuplicate: 'INBOX-001',
+  outboxClaim: 'OUTBOX-001',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

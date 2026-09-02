@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify';
+import crypto from 'node:crypto';
 import type { Db, DbClient, Queryable } from '../db/pool';
 
 export type AuditAction =
@@ -31,7 +32,10 @@ export type AuditAction =
   | 'MEMBERSHIP.SUSPENDED'
   | 'MEMBERSHIP.REMOVED'
   | 'ROLE.ASSIGNED'
-  | 'ROLE.REVOKED';
+  | 'ROLE.REVOKED'
+  | 'DOCUMENT.UPLOADED'
+  | 'DOCUMENT.CONFIRMED'
+  | 'DOCUMENT.DOWNLOADED';
 
 function requestMetadata(request: FastifyRequest): { ip: string; userAgent: string; traceId: string } {
   return {
@@ -45,22 +49,56 @@ export async function writeAuditEvent(
   db: Queryable,
   action: AuditAction,
   request: FastifyRequest,
-  options: { userId?: string | null; tenantId?: string | null; metadata?: Record<string, unknown> } = {},
+  options: {
+    userId?: string | null;
+    tenantId?: string | null;
+    objectType?: string | null;
+    objectId?: string | null;
+    metadata?: Record<string, unknown>;
+  } = {},
 ): Promise<void> {
   const { ip, userAgent, traceId } = requestMetadata(request);
-  await db.query(
-    `INSERT INTO audit_events (user_id, tenant_id, action, metadata, ip_metadata, user_agent, trace_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [
-      options.userId ?? null,
+  await withTransaction(db as Db, async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [789123]);
+    const last = await client.query(
+      'SELECT event_hash FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 1',
+    );
+    const previousHash = last.rows[0]?.event_hash ? String(last.rows[0].event_hash) : null;
+    const metadata = JSON.stringify(options.metadata ?? {});
+    const ipMetadata = JSON.stringify({ ip });
+    const canonical = JSON.stringify([
       options.tenantId ?? null,
+      options.userId ?? null,
       action,
-      JSON.stringify(options.metadata ?? {}),
-      JSON.stringify({ ip }),
+      options.objectType ?? null,
+      options.objectId ?? null,
+      metadata,
+      ipMetadata,
       userAgent,
       traceId,
-    ],
-  );
+      previousHash,
+    ]);
+    const eventHash = crypto.createHash('sha256').update(canonical).digest('hex');
+    await client.query(
+      `INSERT INTO audit_events
+        (user_id, tenant_id, action, metadata, ip_metadata, user_agent, trace_id,
+         object_type, object_id, previous_hash, event_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        options.userId ?? null,
+        options.tenantId ?? null,
+        action,
+        metadata,
+        ipMetadata,
+        userAgent,
+        traceId,
+        options.objectType ?? null,
+        options.objectId ?? null,
+        previousHash,
+        eventHash,
+      ],
+    );
+  });
 }
 
 export interface AuthAttemptInput {

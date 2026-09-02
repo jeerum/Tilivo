@@ -14,6 +14,10 @@ export const TENANT_PERMISSIONS = [
   'member.remove',
   'role.read',
   'role.manage',
+  'audit.read',
+  'document.read',
+  'document.upload',
+  'document.manage',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -40,19 +44,31 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'member.remove',
       'role.read',
       'role.manage',
+      'audit.read',
+      'document.read',
+      'document.upload',
+      'document.manage',
     ],
   },
   {
     name: 'Accountant',
-    permissions: ['tenant.read', 'company.read', 'member.read', 'role.read'],
+    permissions: [
+      'tenant.read',
+      'company.read',
+      'member.read',
+      'role.read',
+      'audit.read',
+      'document.read',
+      'document.upload',
+    ],
   },
   {
     name: 'Employee',
-    permissions: ['tenant.read', 'company.read'],
+    permissions: ['tenant.read', 'company.read', 'document.read'],
   },
   {
     name: 'Viewer',
-    permissions: ['tenant.read', 'company.read'],
+    permissions: ['tenant.read', 'company.read', 'document.read'],
   },
 ];
 

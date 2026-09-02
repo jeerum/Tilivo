@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import {
   ForgotPasswordPage,
@@ -8,18 +9,22 @@ import {
   VerifyEmailPage,
 } from './auth/pages';
 import { useAuth } from './auth/AuthContext';
+import { AppShell } from './app/AppShell';
+import { DocumentsPage } from './app/DocumentsPage';
 
-function ProtectedHome() {
+function Protected({ children }: { children: ReactNode }) {
   const { ready, user } = useAuth();
   if (!ready) return <p className="muted">Loading...</p>;
   if (!user) return <Navigate to="/login" replace />;
-  return <HomePage />;
+  return <AppShell>{children}</AppShell>;
 }
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<ProtectedHome />} />
+      <Route path="/" element={<Protected><HomePage /></Protected>} />
+      <Route path="/documents" element={<Protected><DocumentsPage /></Protected>} />
+      <Route path="/settings" element={<Protected><HomePage /></Protected>} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />

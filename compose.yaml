@@ -10,6 +10,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-tilivo_app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       TILIVO_RUNTIME_PASSWORD: ${TILIVO_RUNTIME_PASSWORD:?Set TILIVO_RUNTIME_PASSWORD in .env}
+      TILIVO_WORKER_PASSWORD: ${TILIVO_WORKER_PASSWORD:?Set TILIVO_WORKER_PASSWORD in .env}
     volumes:
       - tilivo-db-data:/var/lib/postgresql/data
       - ./deploy/db/init-runtime-role.sh:/docker-entrypoint-initdb.d/10-runtime-role.sh:ro
@@ -43,8 +44,11 @@ services:
       EMAIL_DRIVER: ${EMAIL_DRIVER:-noop}
       EMAIL_DEV_OUTBOX: ${EMAIL_DEV_OUTBOX:-false}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
+      DOCUMENT_STORAGE_DIR: /app/storage/documents
     ports:
       - "127.0.0.1:${API_HOST_PORT:-3100}:3000"
+    volumes:
+      - tilivo-document-storage:/app/storage
     depends_on:
       tilivo-db:
         condition: service_healthy
@@ -87,6 +91,7 @@ services:
       DATABASE_URL: postgres://tilivo_runtime:${TILIVO_RUNTIME_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
       MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
       TEST_DATABASE_URL: postgres://tilivo_runtime:${TILIVO_RUNTIME_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
+      WORKER_TEST_DATABASE_URL: postgres://tilivo_worker:${TILIVO_WORKER_PASSWORD}@tilivo-db:5432/tilivo_accounting_test
       LOG_LEVEL: silent
       EMAIL_DRIVER: dev
       EMAIL_DEV_OUTBOX: "true"
@@ -99,12 +104,31 @@ services:
     networks:
       - tilivo
 
+  tilivo-worker:
+    build:
+      context: ./apps/api
+      target: prod
+    container_name: tilivo-worker
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://tilivo_worker:${TILIVO_WORKER_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
+      LOG_LEVEL: info
+    depends_on:
+      tilivo-db:
+        condition: service_healthy
+    networks:
+      - tilivo
+
 # The physical volume keeps its legacy name so existing production data is
 # preserved; new deployments reference it under the logical name tilivo-db-data.
 volumes:
   tilivo-db-data:
     name: mrjkp-accounting-db-data
     external: true
+  tilivo-document-storage:
+    name: tilivo-document-storage
 
 networks:
   tilivo:

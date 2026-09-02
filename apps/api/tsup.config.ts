@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/server.ts', 'src/migrate.ts'],
+  entry: ['src/server.ts', 'src/migrate.ts', 'src/worker.ts'],
   format: ['esm'],
   target: 'node22',
   platform: 'node',
@@ -11,4 +11,3 @@ export default defineConfig({
   splitting: false,
   dts: false,
 });
-

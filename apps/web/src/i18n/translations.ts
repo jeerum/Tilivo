@@ -88,6 +88,9 @@ export const translations = {
     save: 'Salvesta',
     legalName: 'Juriidiline nimi',
     permissions: 'Õigused',
+    documents: 'Dokumendid',
+    settings: 'Seaded',
+    auditLog: 'Audit log',
   },
   en: {
     appName: 'Tilivo',
@@ -175,6 +178,9 @@ export const translations = {
     save: 'Save',
     legalName: 'Legal name',
     permissions: 'Permissions',
+    documents: 'Documents',
+    settings: 'Settings',
+    auditLog: 'Audit log',
   },
 } as const;
 

@@ -21,6 +21,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=base /app/dist ./dist
 COPY --from=base /app/migrations ./migrations
+RUN mkdir -p /app/storage/documents && chown -R node:node /app/storage
 USER node
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

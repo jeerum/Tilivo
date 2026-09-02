@@ -3,6 +3,7 @@ import type { Writable } from 'node:stream';
 import Fastify, { LogController, type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -13,9 +14,11 @@ import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
 import { rootRoutes } from './routes/root';
 import { tenantRoutes } from './routes/tenant';
+import { documentRoutes } from './routes/documents';
 import { createEmailProvider } from './services/emailProvider';
 import { findSessionByToken } from './services/sessionService';
 import { hashToken } from './lib/security';
+import { LocalObjectStorageProvider } from './services/documentStorage';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -59,6 +62,7 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
   });
 
   await app.register(cookie);
+  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
   await app.register(rateLimit, {
     global: true,
     max: 300,
@@ -183,6 +187,12 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
   await app.register(tenantRoutes, {
     db,
     config,
+  });
+  const storage = new LocalObjectStorageProvider(config.DOCUMENT_STORAGE_DIR);
+  await app.register(documentRoutes, {
+    db,
+    config,
+    storage,
   });
   return app;
 }

@@ -6,6 +6,7 @@ import { BUILTIN_ROLES, type MembershipStatus } from '../lib/tenant';
 import { findUserByEmail } from '../services/identityService';
 import { writeAuditEvent } from '../services/audit';
 import { resolveSessionUser } from '../services/sessionContext';
+import { listTenantAudit } from '../services/auditQuery';
 import {
   addMember,
   assignRole,
@@ -254,5 +255,16 @@ export async function tenantRoutes(app: FastifyInstance, options: TenantRouteOpt
     await requirePermission(db, userId, tenantId, 'role.read');
     const roles = await listRoles(db, tenantId);
     return { roles };
+  });
+
+  app.get('/api/v1/audit', async (request) => {
+    const tenantId = await enterTenant(request, db, config);
+    const userId = await authenticate(request, db, config);
+    await requirePermission(db, userId, tenantId, 'audit.read');
+    const query = request.query as { limit?: string; offset?: string };
+    const limit = Math.min(Math.max(Number(query.limit ?? 50), 1), 200);
+    const offset = Math.max(Number(query.offset ?? 0), 0);
+    const result = await listTenantAudit(db, tenantId, { limit, offset });
+    return { audit: result.events, total: result.total, limit, offset };
   });
 }

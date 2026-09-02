@@ -512,10 +512,8 @@ export function HomePage() {
   };
 
   return (
-    <AuthCard title={t('welcomeBack')}>
-      <p className="muted">
-        {user.email} · {user.totp_enabled ? t('twoFactorTitle') : t('account')}
-      </p>
+    <main className="workspace-page">
+      <h2 className="page-title">{t('welcomeBack')}</h2>
       {message && <p className="success-text">{message}</p>}
       <ErrorNote error={error} />
       {tenants.length === 0 ? (
@@ -695,7 +693,7 @@ export function HomePage() {
       <button type="button" onClick={() => void logout()}>
         {t('logout')}
       </button>
-    </AuthCard>
+    </main>
   );
 }
 

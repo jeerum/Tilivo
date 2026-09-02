@@ -19,12 +19,25 @@ if [[ -z "${TILIVO_RUNTIME_PASSWORD:-}" ]]; then
   . ./.env
   set +a
 fi
+if [[ -z "${TILIVO_WORKER_PASSWORD:-}" ]]; then
+  WORKER_PW="$(openssl rand -hex 24)"
+  printf 'TILIVO_WORKER_PASSWORD=%s\n' "$WORKER_PW" >> .env
+  set -a
+  . ./.env
+  set +a
+fi
 
 docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
   -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tilivo_runtime') THEN CREATE ROLE tilivo_runtime LOGIN PASSWORD '${TILIVO_RUNTIME_PASSWORD}'; ELSE ALTER ROLE tilivo_runtime WITH LOGIN PASSWORD '${TILIVO_RUNTIME_PASSWORD}'; END IF; END \$\$;"
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
+  -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tilivo_worker') THEN CREATE ROLE tilivo_worker LOGIN PASSWORD '${TILIVO_WORKER_PASSWORD}'; ELSE ALTER ROLE tilivo_worker WITH LOGIN PASSWORD '${TILIVO_WORKER_PASSWORD}'; END IF; END \$\$;"
 
 docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
   -c "GRANT CONNECT ON DATABASE \"$POSTGRES_DB\" TO tilivo_runtime"
 docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
   -c 'GRANT CONNECT ON DATABASE "tilivo_accounting_test" TO tilivo_runtime' >/dev/null 2>&1 || true
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
+  -c "GRANT CONNECT ON DATABASE \"$POSTGRES_DB\" TO tilivo_worker"
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
+  -c 'GRANT CONNECT ON DATABASE "tilivo_accounting_test" TO tilivo_worker' >/dev/null 2>&1 || true
 echo "runtime role ready"

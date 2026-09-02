@@ -38,6 +38,7 @@ const AppEnvSchema = z.object({
   EMAIL_DRIVER: z.enum(emailDrivers).default('noop'),
   EMAIL_DEV_OUTBOX: z.preprocess((value) => toBoolean(value, false), z.boolean()),
   TOTP_ENCRYPTION_KEY: z.string().default(''),
+  DOCUMENT_STORAGE_DIR: z.string().min(1).default('/app/storage/documents'),
 });
 
 export type AppConfig = z.infer<typeof AppEnvSchema>;
