@@ -13,6 +13,7 @@ import { AppShell } from './app/AppShell';
 import { DocumentsPage } from './app/DocumentsPage';
 import { SettingsPage } from './app/SettingsPage';
 import { AccountingPage } from './app/AccountingPage';
+import { SalesPage } from './app/SalesPage';
 
 function Protected({ children }: { children: ReactNode }) {
   const { ready, user } = useAuth();
@@ -27,6 +28,7 @@ export default function App() {
       <Route path="/" element={<Protected><HomePage /></Protected>} />
       <Route path="/documents" element={<Protected><DocumentsPage /></Protected>} />
       <Route path="/accounting" element={<Protected><AccountingPage /></Protected>} />
+      <Route path="/sales" element={<Protected><SalesPage /></Protected>} />
       <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
