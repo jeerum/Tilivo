@@ -98,6 +98,32 @@ export async function createJournalDraft(
   },
 ): Promise<string> {
   return withTenantTransaction(pool, tenantId, async (client) => {
+    const accountIds = [...new Set(input.lines.map((line) => line.accountId))];
+    if (accountIds.length > 0) {
+      const accounts = await client.query(
+        'SELECT id FROM accounts WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+        [tenantId, accountIds],
+      );
+      if (accounts.rows.length !== accountIds.length) {
+        throw new AppError(ErrorCodes.accountNotFound, 'Journal references an account outside the tenant', 400);
+      }
+    }
+    const taxCodeIds = [
+      ...new Set(
+        input.lines
+          .map((line) => line.taxCodeId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    ];
+    if (taxCodeIds.length > 0) {
+      const taxCodes = await client.query(
+        'SELECT id FROM tax_codes WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+        [tenantId, taxCodeIds],
+      );
+      if (taxCodes.rows.length !== taxCodeIds.length) {
+        throw new AppError(ErrorCodes.taxCodeNotFound, 'Journal references a tax code outside the tenant', 400);
+      }
+    }
     const entry = await client.query(
       `INSERT INTO journal_entries
          (tenant_id, business_date, description, currency_code, source_type, created_by)
