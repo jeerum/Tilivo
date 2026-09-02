@@ -35,5 +35,5 @@ SQL
 docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
   -c "GRANT CONNECT ON DATABASE \"$POSTGRES_DB\" TO tilivo_runtime"
 docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
-  -c "GRANT CONNECT ON DATABASE \"$POSTGRES_DB\" TO tilivo_runtime" >/dev/null 2>&1 || true
+  -c 'GRANT CONNECT ON DATABASE "tilivo_accounting_test" TO tilivo_runtime' >/dev/null 2>&1 || true
 echo "runtime role ready"
