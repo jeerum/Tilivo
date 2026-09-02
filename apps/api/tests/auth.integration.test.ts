@@ -65,8 +65,8 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
     headers: Record<string, string | undefined>;
   }> {
     const headers: Record<string, string> = {
-      'content-type': 'application/json',
     };
+    if (request.payload) headers['content-type'] = 'application/json';
     if (request.ip) headers['x-forwarded-for'] = request.ip;
     if (request.cookie) headers.cookie = request.cookie;
     if (request.csrf) headers['x-csrf-token'] = request.csrf;
