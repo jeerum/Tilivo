@@ -41,7 +41,7 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
       LOG_LEVEL: 'silent',
       EMAIL_DRIVER: 'dev',
       EMAIL_DEV_OUTBOX: 'true',
-      TOTP_ENCRYPTION_KEY: 't'.repeat(64),
+      TOTP_ENCRYPTION_KEY: 'a'.repeat(64),
       APP_BASE_URL: 'http://localhost:5173',
       COOKIE_SECURE: 'false',
     });
