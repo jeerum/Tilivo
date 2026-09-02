@@ -10,6 +10,7 @@ import {
 } from '../src/services/integrationQueue';
 import { verifyAuditChain } from '../src/services/auditQuery';
 import { withTenantTransaction } from '../src/services/tenantService';
+import { writeAuditEvent } from '../src/services/audit';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const workerDatabaseUrl = process.env.WORKER_TEST_DATABASE_URL;
@@ -158,6 +159,23 @@ describe.skipIf(!databaseUrl || !workerDatabaseUrl)('v0.4 platform integration',
     const after = await verifyAuditChain(ownerPool);
     expect(after.valid).toBe(false);
     expect(after.brokenAt).toBeTruthy();
+  });
+
+  it('audit hash chain stays valid under parallel writes', async () => {
+    const request = {
+      ip: '10.0.99.10',
+      id: 'parallel-audit-trace',
+      headers: { 'user-agent': 'parallel-audit-test' },
+    } as any;
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        writeAuditEvent(pool, 'AUTH.LOGIN_FAILED', request, {
+          metadata: { attempt: index },
+        }),
+      ),
+    );
+    const check = await verifyAuditChain(ownerPool ?? pool);
+    expect(check.valid).toBe(true);
   });
 
   it('inbox is idempotent by provider/external id', async () => {

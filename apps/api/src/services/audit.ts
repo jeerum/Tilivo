@@ -46,7 +46,7 @@ function requestMetadata(request: FastifyRequest): { ip: string; userAgent: stri
 }
 
 export async function writeAuditEvent(
-  db: Queryable,
+  db: Db,
   action: AuditAction,
   request: FastifyRequest,
   options: {
@@ -58,8 +58,7 @@ export async function writeAuditEvent(
   } = {},
 ): Promise<void> {
   const { ip, userAgent, traceId } = requestMetadata(request);
-  await withTransaction(db as Db, async (client) => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [789123]);
+  await withSerializedAuditWrite(db, async (client) => {
     const last = await client.query(
       'SELECT event_hash FROM audit_events ORDER BY created_at DESC, id DESC LIMIT 1',
     );
@@ -99,6 +98,38 @@ export async function writeAuditEvent(
       ],
     );
   });
+}
+
+/**
+ * Audit hash-chain appends must be serialised BEFORE the transaction starts.
+ * `now()` is fixed at BEGIN; a transaction that waited on an in-transaction
+ * advisory lock could otherwise insert with an older created_at after a newer
+ * event and break chronological chain verification.
+ */
+async function withSerializedAuditWrite<T>(
+  db: Db,
+  callback: (client: DbClient) => Promise<T>,
+): Promise<T> {
+  const client = await db.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [789123]);
+    await client.query('BEGIN');
+    try {
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock($1)', [789123]);
+    } catch {
+      // The session may already be unusable; releasing the pooled client clears it.
+    }
+    client.release();
+  }
 }
 
 export interface AuthAttemptInput {
