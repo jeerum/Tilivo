@@ -20,4 +20,9 @@ JRN-001..006 journal not found / not draft / not balanced / line invalid /
 TAX-001..003 tax code not found / invalid / duplicate
 FX-001..003  fx rate not found / duplicate / invalid
 CUR-001      currency not found
+CUST-001..003 customer not found / inactive / invalid customer
+INV-001..013 invoice not found / not draft / no lines / line invalid /
+             due date invalid / series missing / account mapping missing /
+             tax code invalid / immutable / already credited / pdf not ready /
+             reference invalid / currency invalid
 ```

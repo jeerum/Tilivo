@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.0] - 2026-09-02
+
+- Sales schema: business_parties, invoice_number_series, sales_settings,
+  sales_invoices/lines, sales_invoice_pdfs, sales_invoice_credit_links;
+  RLS + FORCE + komposiit-FK-d `(tenant_id, id)`.
+- Number eraldatakse atomically ISSUE ajal; issued arve ja read on
+  immuutsed (ka otse SQL-i eest); kreeditlink insert-only; PDF READY on
+  külmutatud.
+- Issue-transaction: serveripoolne ümberarvutus, kliendi snapshot,
+  seerianumber, makseviide, pearaamatukanne (AR/tulu/käibemaks), staatuse
+  muutus ning outbox `SALES_INVOICE_ISSUED` /
+  `SALES_INVOICE_PDF_REQUESTED`.
+- Payment references: FI domestic (7-3-1) ja RF (ISO 11649) testvektoritega.
+- Serveripoolne deterministlik PDF-render + worker-töötlus +
+  document/version salvestus + SHA-256.
+- Täiskreeditarve oma numbriga ja peegelkandega; originaal -> CREDITED.
+- API: customers, sales/series, sales/settings, sales/invoices
+  (draft, issue, credit, cancel-draft, pdf, pdf/retry).
+- Permissions: sales.read, sales.customer.manage, invoice.create/issue/credit/
+  pdf.retry, sales.settings.manage.
+- Desktop UI `/sales` (Customers / Invoices, ET/EN) + Playwright E2E.
+- Tests: sales lifecycle, PDF idempotency, 100 parallel numbering, double
+  issue, credit race, RLS/cross-tenant hostile, direct DB immutability,
+  upgrade migration v0.4 -> v0.6.
+
 ## [0.5.0] - 2026-09-02
 
 - Accounting schema: accounts, fiscal_years, accounting_periods,

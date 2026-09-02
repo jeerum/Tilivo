@@ -2,9 +2,9 @@
 
 ## Current version
 
-**v0.5 (Accounting Core) - GATE PASS**
+**v0.6 (Sales) - GATE PASS**
 
-v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 open
+v0.5 gate: **PASS**. v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 open
 (`docs/SECURITY_REVIEW_V0_2.md`).
 
 ## Completed
@@ -19,6 +19,7 @@ v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 open
   storage + hostile matrix, retention foundation, inbox/outbox + worker,
   backup/restore, Playwright desktop/mobile.
 - v0.5 Accounting Core (see below).
+- v0.6 Sales (see below).
 
 ## v0.5 Accounting Core
 
@@ -66,28 +67,64 @@ v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 open
 ## Not started
 
 - v0.4 Audit & compliance edasiarendus
-- v0.6 Sales / arveldus (ei alustata enne v0.5 gate PASS)
+- v0.7 Purchases / ostuarved
+- v0.8 Banking, v0.9 Payments, v0.10 FI VAT reporting/period close
 - Production SMTP driver
+
+## v0.6 Sales
+
+### Schema / invariants
+
+- Tenant-owned: `business_parties`, `invoice_number_series`,
+  `sales_settings`, `sales_invoices`, `sales_invoice_lines`,
+  `sales_invoice_credit_links`, `sales_invoice_pdfs`; RLS + FORCE RLS ja
+  komposiit-FK-d `(tenant_id, id)`.
+- Arve number eraldatakse ainult ISSUE ajal atomically seeriast.
+- ISSUED arve ja read on immuutsed; number/payment reference/snapshot/journal
+  link on kohustuslikud. Kreeditlink on insert-only; READY PDF on külmutatud.
+- Summad NUMERIC; line-level sentide ümardamine `decimal.js`; ISSUE arvutab
+  kõik summad serveris uuesti.
+
+### Engine / API / UI
+
+- Issue-transaction: DRAFT -> ISSUED koos kanne + outbox; DRAFT canceldatav.
+- Täiskreeditarve oma numbriga (SALES_CREDIT_NOTE) ja peegelkanne; originaal
+  CREDITED.
+- PDF: deterministlik serverirender, worker outboxi kaudu, SHA-256 + document
+  versionid; retry ja allalaadimine auth'iga.
+- API customers/series/settings/invoices; permissions sales.* / invoice.*.
+- Desktop UI `/sales`: Customers, Invoices, read-only issued vaade, PDF olek,
+  credit action.
+
+### Katvus
+
+- 13 sales integration/security/concurrency testi (server test DB) koos
+  olemasoleva 96-testilise regressiooniga.
+- 100 parallel issue -> 100 unikaalset numbrit; double issue ja credit race
+  -> täpselt üks õnnestumine; PDF duplicate job -> üks dokument.
 
 ## Tests
 
 ```text
 Local: API lint/typecheck/unit 25 PASS, web lint/typecheck/unit 6 PASS,
        web build PASS
-Server test DB (fresh reset each run): 71/71 PASS
-  - v0.4 -> v0.5 upgrade migration on scratch DB (data preservation, RLS,
-    grants, triggers)
+Server test DB (fresh reset each run): 96/96 PASS
+  - v0.4 -> v0.6 upgrade migration on scratch DB (data preservation, RLS,
+    grants, triggers, sales seed)
   - posted immutability direct runtime SQL
   - double post + reversal race + period close vs post race
   - 100 parallel posts -> 100 unique contiguous numbers
   - tax/FX CRUD + conversion
   - journal/ledger/account-ledger/trial-balance views
   - role permission matrix + cross-tenant RLS + auth/CSRF guards
+  - v0.6 sales: lifecycle, PDF worker/storage/idempotency, credit notes,
+    payment references, RLS/cross-tenant hostile, direct DB immutability,
+    100 parallel numbering, double issue, credit race
   - v0.2 auth 18, v0.3 tenant/RLS 6, v0.4 platform 6 (incl. parallel audit
     chain), unit/security/env/health 25
-Production UI Playwright: 8 PASS / 1 skip (desktop drawer test by design)
+Production UI Playwright: 8 PASS / 1 skip + sales flow
 npm audit (root/api/web): 0 vulnerabilities
-Production accounting smoke: 34/34 PASS
+Production smoke: v0.5 accounting 34/34 PASS + v0.6 sales flow PASS
 Backup/restore + SHA-256 verify: PASS
 Production v0.4 backup copy -> migrate -> data preservation: PASS
 ```
@@ -96,11 +133,12 @@ Production v0.4 backup copy -> migrate -> data preservation: PASS
 
 - `/opt/tilivo`, containers `tilivo-*`, ports 127.0.0.1:3100/3101; public
   https://tilivo.mrjaak.com (Let's Encrypt + isolated nginx vhost).
-- Production DB migrated to v0.5 (10 migrations), api/web containers rebuilt,
+- Production DB migrated to v0.6 (11 migrations), api/web/worker containers
+  rebuilt,
   worker/db healthy; existing host/container services unchanged.
 - Production test tenant cleanup complete; QA tenants (Tilivo QA Tenant,
   E2E Switch Tenant, E2E Accounting QA Tenant) are intentional fixtures.
 
 ## Next step
 
-v0.6 Sales - ei alustata enne eraldi ülesannet.
+v0.7 Purchases - ei alustata enne eraldi ülesannet.

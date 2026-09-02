@@ -64,6 +64,21 @@ Backend API (Fastify) – /api/v1, /api/v1/auth
 - Auth lehed: register, verify, login, forgot/reset, 2FA seadistus, sessioonid, väljalogimine.
 - `apps/web/nginx.conf` serveerib staatilist buildi ja proksib `/api` backendile.
 
+## Backend moodulid v0.6 (Sales)
+
+- `routes/sales` – customers, series, settings, invoice draft/issue/credit,
+  PDF allalaadimine/retry.
+- `services/salesService` – ärireeglid: draft-arvutus, ISSUE-transaction,
+  kreedit, seeriad/seaded, arvevaated.
+- `lib/paymentReferences` – FI domestic (7-3-1) ja RF (ISO 11649) providerid.
+- `services/invoicePdf` – deterministlik serveripoolne PDF-render.
+- `services/invoicePdfWorker` – outbox `SALES_INVOICE_PDF_REQUESTED` töötlus;
+  idempotentne, tenant-scoped.
+- Arve ISSUE ja pearaamatukanne on üks transaction; issued arve on immuutne.
+- Kreeditarve on iseseisev arve, mis peegeldab originaali kandet.
+
+Frontend: `/sales` workspace (Customers / Invoices), ET/EN, desktop-first.
+
 ## Deploy põhimõtted
 
 - Isoleeritud Docker Compose projekt (`tilivo`), oma network/volume/DB/kasutaja/pordid.

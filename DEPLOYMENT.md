@@ -11,7 +11,7 @@ https://tilivo.mrjaak.com
 - Nginx: isoleeritud site `tilivo.mrjaak.com`, proksib `127.0.0.1:3101`; HTTP -> HTTPS.
 - Rakenduse `APP_BASE_URL=https://tilivo.mrjaak.com`.
 
-## Praegune seis (v0.2 + rename Tilivo)
+## Praegune seis (v0.6 Sales)
 
 Tilivo on deploy'tud VPS-ile (locoforum) **isoleeritult**, ilma olemasolevaid teenuseid puutumata:
 
@@ -19,7 +19,7 @@ Tilivo on deploy'tud VPS-ile (locoforum) **isoleeritult**, ilma olemasolevaid te
 | --- | --- |
 | Kataloog serveris | `/opt/tilivo` |
 | Compose projekt | `tilivo` |
-| Containerid | `tilivo-db`, `tilivo-api`, `tilivo-web` |
+| Containerid | `tilivo-db`, `tilivo-api`, `tilivo-web`, `tilivo-worker` |
 | Network | `tilivo` |
 | Volume (füüsiline nimi) | `mrjkp-accounting-db-data` – legacy nimi säilitatud, et andmeid mitte kaotada |
 | DB nimi | `tilivo_accounting` (test: `tilivo_accounting_test`) |
@@ -44,6 +44,17 @@ Porte 3100/3101 ei muudetud. Containerid kuulavad ainult `127.0.0.1`, firewalli 
 cd /opt/tilivo
 ./deploy/remote-deploy.sh
 ```
+
+v0.6 lisab workerile dokumendimahu (`tilivo-document-storage` on jagatud api ja
+workeriga) ning käivitab migratsiooni `20260903100000_sales_core` enne workeri
+üles toomist. `remote-deploy.sh` teeb selle automaatselt:
+
+```text
+db up -> ensure roles -> api/web build+up -> migrate up -> worker up -> smoke
+```
+
+Sales smoke on kaetud `tmp_create_e2e.sh` + Playwright `sales.spec.ts` abil
+(QA tenant 'E2E Accounting QA Tenant').
 
 Backup:
 
