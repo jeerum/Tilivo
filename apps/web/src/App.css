@@ -1,0 +1,159 @@
+:root {
+  color-scheme: light;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    Roboto,
+    'Helvetica Neue',
+    sans-serif;
+  background: #f4f5f7;
+  color: #17202a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 0 12px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: 0.2px;
+}
+
+.tagline {
+  margin: 6px 0 0;
+  color: #5b6770;
+}
+
+.language-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #5b6770;
+}
+
+.language-switch select {
+  padding: 6px 8px;
+  border: 1px solid #cfd6dc;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e2e6ea;
+  border-radius: 10px;
+  padding: 24px;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+.status-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.status-card h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  color: #5b6770;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.status-text {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.error-text {
+  margin: 6px 0 0;
+  color: #b3261e;
+  font-size: 14px;
+}
+
+.status-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: 0 0 18px;
+}
+
+.status-icon.ok {
+  background: #1e8e3e;
+}
+
+.status-icon.degraded {
+  background: #b3261e;
+}
+
+.status-icon.checking {
+  background: #f0a91a;
+}
+
+.details {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0;
+}
+
+.details > div {
+  padding: 14px 0;
+  border-bottom: 1px solid #edf0f2;
+}
+
+.details > div:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+dt {
+  color: #5b6770;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+dd {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.ok-text {
+  color: #1e8e3e;
+}
+
+.bad-text {
+  color: #b3261e;
+}
+
+.mono {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 13px;
+}
+
