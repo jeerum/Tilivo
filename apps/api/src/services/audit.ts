@@ -157,7 +157,7 @@ export async function writeAuditEventStandalone(
       metadata,
       ipMetadata,
       '',
-      '',
+      null,
       previousHash,
     ]);
     const eventHash = crypto.createHash('sha256').update(canonical).digest('hex');
@@ -173,7 +173,7 @@ export async function writeAuditEventStandalone(
         metadata,
         ipMetadata,
         '',
-        '',
+        null,
         options.objectType ?? null,
         options.objectId ?? null,
         previousHash,
