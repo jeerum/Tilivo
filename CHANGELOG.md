@@ -1,5 +1,10 @@
 # Changelog
 
+## [Avalik kasutus 2026-09-02]
+
+- `https://tilivo.mrjaak.com` on avalikult kasutusel (Let's Encrypt + isoleeritud nginx-vhost).
+- `APP_BASE_URL` uuendatud.
+
 ## [Security review 2026-09-02] - v0.2
 
 - Harden: verification/reset/challenge one-time atomicity.

@@ -1,5 +1,16 @@
 # Deploy - Tilivo
 
+## Avalik aadress
+
+```text
+https://tilivo.mrjaak.com
+```
+
+- DNS: `tilivo.mrjaak.com -> 152.53.160.197` (A-rekord).
+- Sertifikaat: Let's Encrypt, automaatne renew.
+- Nginx: isoleeritud site `tilivo.mrjaak.com`, proksib `127.0.0.1:3101`; HTTP -> HTTPS.
+- Rakenduse `APP_BASE_URL=https://tilivo.mrjaak.com`.
+
 ## Praegune seis (v0.2 + rename Tilivo)
 
 Tilivo on deploy'tud VPS-ile (locoforum) **isoleeritult**, ilma olemasolevaid teenuseid puutumata:

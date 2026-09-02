@@ -32,7 +32,6 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
 
 - v0.3 Multi-tenant / RLS
 - Accounting core (v0.5+)
-- Avalik DNS/nginx kasutuselevõtt
 - Production SMTP driver
 
 ## Known issues
@@ -54,6 +53,7 @@ Backup PASS, restore PASS
 
 - `/opt/tilivo`, containerid `tilivo-*`, pordid 127.0.0.1:3100/3101.
 - Health PASS, web PASS, auth smoke PASS.
+- Avalik: **https://tilivo.mrjaak.com** (Let's Encrypt + isoleeritud nginx-vhost).
 - Vanad serveriteenused kontrollitud – muutumatud.
 
 ## Next step

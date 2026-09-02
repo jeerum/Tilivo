@@ -6,6 +6,15 @@ versioonides. v0.1 pani vundamendi (health, DB, migratsioonid, logi, Trace/Error
 e-maili kinnituse, sisselogimise, sessioonid, parooli taastamise, TOTP 2FA, recovery codes, rate limitingu ja
 auditi.
 
+## Avalik kasutus
+
+```text
+https://tilivo.mrjaak.com
+```
+
+Let's Encrypt sertifikaat on olemas ja uueneb automaatselt; nginx-vhost on isoleeritud ainult sellele
+domeenile ja proksib `127.0.0.1:3101`-le.
+
 ## Repo struktuur
 
 ```text
