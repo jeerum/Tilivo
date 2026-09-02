@@ -35,7 +35,7 @@ log() {
 START_TS="$(date +%s)"
 log "backup start"
 
-if docker compose exec -T accounting-db \
+if docker compose exec -T tilivo-db \
     pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
     | gzip > "$TMP_FILE"; then
   mv "$TMP_FILE" "$OUT_FILE"

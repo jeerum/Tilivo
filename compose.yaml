@@ -99,6 +99,7 @@ services:
 volumes:
   tilivo-db-data:
     name: mrjkp-accounting-db-data
+    external: true
 
 networks:
   tilivo:
