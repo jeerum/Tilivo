@@ -10,6 +10,17 @@ export interface JournalLineInput {
   debit: string;
   credit: string;
   taxCodeId?: string | null;
+  appliedTaxRate?: string | null;
+  taxSnapshot?: string | null;
+}
+
+export interface JournalDraftInput {
+  businessDate: string;
+  description: string;
+  currencyCode: string;
+  sourceType?: string;
+  sourceId?: string | null;
+  lines: JournalLineInput[];
 }
 
 async function postEntryInTransaction(
@@ -85,65 +96,98 @@ async function postEntryInTransaction(
   return entryNumber;
 }
 
+export async function postJournalEntryInTransaction(
+  client: DbClient,
+  tenantId: string,
+  entryId: string,
+  userId: string,
+): Promise<string> {
+  return postEntryInTransaction(client, tenantId, entryId, userId);
+}
+
+export async function createJournalDraftInTransaction(
+  client: DbClient,
+  tenantId: string,
+  userId: string,
+  input: JournalDraftInput,
+): Promise<string> {
+  const accountIds = [...new Set(input.lines.map((line) => line.accountId))];
+  if (accountIds.length > 0) {
+    const accounts = await client.query(
+      'SELECT id FROM accounts WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+      [tenantId, accountIds],
+    );
+    if (accounts.rows.length !== accountIds.length) {
+      throw new AppError(ErrorCodes.accountNotFound, 'Journal references an account outside the tenant', 400);
+    }
+  }
+  const taxCodeIds = [
+    ...new Set(
+      input.lines
+        .map((line) => line.taxCodeId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  if (taxCodeIds.length > 0) {
+    const taxCodes = await client.query(
+      'SELECT id FROM tax_codes WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+      [tenantId, taxCodeIds],
+    );
+    if (taxCodes.rows.length !== taxCodeIds.length) {
+      throw new AppError(ErrorCodes.taxCodeNotFound, 'Journal references a tax code outside the tenant', 400);
+    }
+  }
+  const entry = await client.query(
+    `INSERT INTO journal_entries
+       (tenant_id, business_date, description, currency_code, source_type, source_id, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id`,
+    [
+      tenantId,
+      input.businessDate,
+      input.description,
+      input.currencyCode,
+      input.sourceType ?? 'MANUAL',
+      input.sourceId ?? null,
+      userId,
+    ],
+  );
+  const entryId = String(entry.rows[0]!.id);
+  let lineNumber = 1;
+  for (const line of input.lines) {
+    await client.query(
+      `INSERT INTO journal_lines
+         (tenant_id, journal_entry_id, line_number, account_id, description, debit, credit,
+          currency_code, tax_code_id, applied_tax_rate, tax_snapshot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        tenantId,
+        entryId,
+        lineNumber,
+        line.accountId,
+        line.description ?? '',
+        line.debit,
+        line.credit,
+        input.currencyCode,
+        line.taxCodeId ?? null,
+        line.appliedTaxRate ?? null,
+        line.taxSnapshot ?? null,
+      ],
+    );
+    lineNumber += 1;
+  }
+  return entryId;
+}
+
 export async function createJournalDraft(
   pool: Db,
   tenantId: string,
   userId: string,
-  input: {
-    businessDate: string;
-    description: string;
-    currencyCode: string;
-    sourceType?: string;
-    lines: JournalLineInput[];
-  },
+  input: JournalDraftInput,
 ): Promise<string> {
-  return withTenantTransaction(pool, tenantId, async (client) => {
-    const accountIds = [...new Set(input.lines.map((line) => line.accountId))];
-    if (accountIds.length > 0) {
-      const accounts = await client.query(
-        'SELECT id FROM accounts WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
-        [tenantId, accountIds],
-      );
-      if (accounts.rows.length !== accountIds.length) {
-        throw new AppError(ErrorCodes.accountNotFound, 'Journal references an account outside the tenant', 400);
-      }
-    }
-    const taxCodeIds = [
-      ...new Set(
-        input.lines
-          .map((line) => line.taxCodeId)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0),
-      ),
-    ];
-    if (taxCodeIds.length > 0) {
-      const taxCodes = await client.query(
-        'SELECT id FROM tax_codes WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
-        [tenantId, taxCodeIds],
-      );
-      if (taxCodes.rows.length !== taxCodeIds.length) {
-        throw new AppError(ErrorCodes.taxCodeNotFound, 'Journal references a tax code outside the tenant', 400);
-      }
-    }
-    const entry = await client.query(
-      `INSERT INTO journal_entries
-         (tenant_id, business_date, description, currency_code, source_type, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id`,
-      [tenantId, input.businessDate, input.description, input.currencyCode, input.sourceType ?? 'MANUAL', userId],
-    );
-    const entryId = String(entry.rows[0]!.id);
-    let lineNumber = 1;
-    for (const line of input.lines) {
-      await client.query(
-        `INSERT INTO journal_lines
-           (tenant_id, journal_entry_id, line_number, account_id, description, debit, credit, currency_code, tax_code_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [tenantId, entryId, lineNumber, line.accountId, line.description ?? '', line.debit, line.credit, input.currencyCode, line.taxCodeId ?? null],
-      );
-      lineNumber += 1;
-    }
-    return entryId;
-  });
+  return withTenantTransaction(pool, tenantId, (client) =>
+    createJournalDraftInTransaction(client, tenantId, userId, input),
+  );
 }
 
 export async function postJournal(pool: Db, tenantId: string, entryId: string, userId: string): Promise<string> {

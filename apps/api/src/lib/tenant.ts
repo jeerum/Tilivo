@@ -25,6 +25,13 @@ export const TENANT_PERMISSIONS = [
   'period.manage',
   'period.reopen',
   'chart.manage',
+  'sales.read',
+  'sales.customer.manage',
+  'invoice.create',
+  'invoice.issue',
+  'invoice.credit',
+  'invoice.pdf.retry',
+  'sales.settings.manage',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -62,6 +69,13 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'period.manage',
       'period.reopen',
       'chart.manage',
+      'sales.read',
+      'sales.customer.manage',
+      'invoice.create',
+      'invoice.issue',
+      'invoice.credit',
+      'invoice.pdf.retry',
+      'sales.settings.manage',
     ],
   },
   {
@@ -77,15 +91,20 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'accounting.read',
       'journal.create',
       'journal.post',
+      'sales.read',
+      'invoice.create',
+      'invoice.issue',
+      'invoice.credit',
+      'invoice.pdf.retry',
     ],
   },
   {
     name: 'Employee',
-    permissions: ['tenant.read', 'company.read', 'document.read'],
+    permissions: ['tenant.read', 'company.read', 'document.read', 'sales.read'],
   },
   {
     name: 'Viewer',
-    permissions: ['tenant.read', 'company.read', 'document.read'],
+    permissions: ['tenant.read', 'company.read', 'document.read', 'sales.read'],
   },
 ];
 

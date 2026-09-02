@@ -53,6 +53,22 @@ export const ErrorCodes = {
   fxRateDuplicate: 'FX-002',
   fxRateInvalid: 'FX-003',
   currencyNotFound: 'CUR-001',
+  customerNotFound: 'CUST-001',
+  customerInactive: 'CUST-002',
+  invalidCustomer: 'CUST-003',
+  invoiceNotFound: 'INV-001',
+  invoiceNotDraft: 'INV-002',
+  invoiceHasNoLines: 'INV-003',
+  invalidInvoiceLine: 'INV-004',
+  invalidDueDate: 'INV-005',
+  numberSeriesNotFound: 'INV-006',
+  accountMappingMissing: 'INV-007',
+  invoiceTaxCodeInvalid: 'INV-008',
+  invoiceImmutable: 'INV-009',
+  alreadyCredited: 'INV-010',
+  pdfNotReady: 'INV-011',
+  referenceInvalid: 'INV-012',
+  currencyInvalid: 'INV-013',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
