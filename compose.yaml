@@ -115,6 +115,7 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://tilivo_worker:${TILIVO_WORKER_PASSWORD}@tilivo-db:5432/${POSTGRES_DB}
       LOG_LEVEL: info
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY in .env}
     depends_on:
       tilivo-db:
         condition: service_healthy
