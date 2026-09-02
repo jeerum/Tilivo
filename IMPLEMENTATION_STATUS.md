@@ -2,7 +2,7 @@
 
 ## Current version
 
-**v0.2 (Identity) + kontrollitud rename MRJKP -> Tilivo**
+**v0.3 (Multi-Tenant + PostgreSQL RLS)**
 
 Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (vt
 `docs/SECURITY_REVIEW_V0_2.md`).
@@ -23,6 +23,8 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
   - füüsiline volume legacy nimega säilitatud (andmete turvalisus).
 - Security review parandused: token/challenge race, TOTP replay, IDOR session revoke, timing enumeration,
   dev e-mail guard, Cache-Control, trust boundary, 2FA cooldown.
+- v0.3: tenants/companies/memberships/roles/permissions, runtime DB roll + FORCE RLS,
+  tenant transaction helper, permission service, tenant API ja frontend onboarding/switcher.
 
 ## In progress
 
@@ -30,7 +32,7 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
 
 ## Not started
 
-- v0.3 Multi-tenant / RLS
+- v0.4 Audit & compliance edasiarendus
 - Accounting core (v0.5+)
 - Production SMTP driver
 
@@ -44,7 +46,7 @@ Security review seis: **v0.2 security review tehtud – CRITICAL/HIGH 0 open** (
 
 ```text
 npm run test:ci PASS (lint, typecheck, API unit, web unit, build)
-Serveris test-DB: 43/43 PASS (sh race/IDOR/replay security testid)
+Serveris test-DB: 52/52 PASS (sh v0.2 auth + v0.3 tenant/RLS/IDOR/pool tests)
 Migratsioon up/down PASS
 Backup PASS, restore PASS
 ```
@@ -54,8 +56,10 @@ Backup PASS, restore PASS
 - `/opt/tilivo`, containerid `tilivo-*`, pordid 127.0.0.1:3100/3101.
 - Health PASS, web PASS, auth smoke PASS.
 - Avalik: **https://tilivo.mrjaak.com** (Let's Encrypt + isoleeritud nginx-vhost).
+- v0.3 production: RLS enabled + FORCE, runtime roll `tilivo_runtime` (no superuser/bypassrls),
+  migratsioonid rakendatud, backup/restore PASS.
 - Vanad serveriteenused kontrollitud – muutumatud.
 
 ## Next step
 
-v0.3 – ei alustata automaatselt.
+v0.4 – ei alustata automaatselt.

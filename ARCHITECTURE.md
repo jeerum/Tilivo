@@ -42,9 +42,11 @@ Backend API (Fastify) – /api/v1, /api/v1/auth
 - `db` – pg pool
 - `routes/health` – `GET /api/v1/health` (kontrollib `SELECT 1`)
 - `routes/auth` – register, verify, login/logout, sessioonid, parool, TOTP 2FA, recovery codes
+- `routes/tenant` – tenant/company/member/role API koos tenant context'i ja permissionitega
 - `lib/errors` – Error ID baas (`SYS-001`, `DB-001`, `API-001`, `API-002`, `CFG-001`)
 - `lib/security` – Argon2id, token-hash, TOTP, AES-256-GCM
 - `services/*` – email provider, audit, auth/session/identity teenused
+- RLS: `tilivo_runtime` (NOSUPERUSER/NOBYPASSRLS), FORCE RLS, `SET LOCAL` tenant context
 - Trace ID: `x-trace-id` päis; kui puudub, genereeritakse UUID; logides `trace_id`
 - Struktureeritud logid pino JSON-formaadis; redaktsioon enne logi
 - OpenAPI (dokid `/docs` ainult siis, kui `EXPOSE_DOCS=true`)

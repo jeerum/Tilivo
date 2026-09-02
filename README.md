@@ -1,10 +1,9 @@
 # Tilivo
 
-Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on **v0.2 Identity** vastavalt
+Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on **v0.3 Multi-Tenant + RLS** vastavalt
 `raamatupidamise_saas_ARCHITECTURE_v2.md` plaanile. Ärireeglid, arveldamine, pank jne tulevad hilisemates
-versioonides. v0.1 pani vundamendi (health, DB, migratsioonid, logi, Trace/Error ID); v0.2 lisab kasutajad,
-e-maili kinnituse, sisselogimise, sessioonid, parooli taastamise, TOTP 2FA, recovery codes, rate limitingu ja
-auditi.
+versioonides. v0.2 lisas identity/2FA; v0.3 lisab tenants, companies, memberships, rollid/permissionid ja
+PostgreSQL Row Level Security.
 
 ## Avalik kasutus
 

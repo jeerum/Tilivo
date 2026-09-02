@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-09-02
+
+- Multi-tenant domain: tenants, companies, memberships, roles, permissions.
+- PostgreSQL RLS: runtime roll `tilivo_runtime` (NOSUPERUSER/NOBYPASSRLS), FORCE RLS,
+  transaction-scoped tenant context, security definer funktsioonid.
+- Tenant API ja frontend (onboarding + switcher + company/member/role vaade).
+- Viimase Owner'i kaitse, membership/permission kontroll, audit sündmused.
+
 ## [Avalik kasutus 2026-09-02]
 
 - `https://tilivo.mrjaak.com` on avalikult kasutusel (Let's Encrypt + isoleeritud nginx-vhost).
