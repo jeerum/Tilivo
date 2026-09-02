@@ -18,6 +18,14 @@ docker compose config -q
 echo "==> build + up db"
 docker compose up -d --build tilivo-db
 
+echo "==> wait for db"
+for _ in $(seq 1 30); do
+  if docker exec tilivo-db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
 echo "==> ensure runtime db role"
 ./deploy/ensure-runtime-role.sh
 

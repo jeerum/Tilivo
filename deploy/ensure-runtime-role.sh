@@ -20,17 +20,8 @@ if [[ -z "${TILIVO_RUNTIME_PASSWORD:-}" ]]; then
   set +a
 fi
 
-docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 <<SQL
-DO \$\$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tilivo_runtime') THEN
-    CREATE ROLE tilivo_runtime LOGIN PASSWORD '${TILIVO_RUNTIME_PASSWORD}';
-  ELSE
-    ALTER ROLE tilivo_runtime WITH LOGIN PASSWORD '${TILIVO_RUNTIME_PASSWORD}';
-  END IF;
-END
-\$\$;
-SQL
+docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
+  -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tilivo_runtime') THEN CREATE ROLE tilivo_runtime LOGIN PASSWORD '${TILIVO_RUNTIME_PASSWORD}'; ELSE ALTER ROLE tilivo_runtime WITH LOGIN PASSWORD '${TILIVO_RUNTIME_PASSWORD}'; END IF; END \$\$;"
 
 docker exec tilivo-db psql -U "$POSTGRES_USER" -d postgres \
   -c "GRANT CONNECT ON DATABASE \"$POSTGRES_DB\" TO tilivo_runtime"
