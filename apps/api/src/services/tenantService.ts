@@ -280,7 +280,7 @@ export async function listMembers(pool: Db, tenantId: string): Promise<MemberVie
       user_id: String(row.user_id),
       email: String(row.email),
       status: String(row.status) as MembershipStatus,
-      roles: JSON.parse(String(row.roles)) as string[],
+      roles: Array.isArray(row.roles) ? (row.roles as string[]) : [],
       created_at: String(row.created_at),
     }));
   });
@@ -443,7 +443,7 @@ export async function listRoles(pool: Db, tenantId: string): Promise<RoleView[]>
       id: String(row.id),
       name: String(row.name),
       is_system: Boolean(row.is_system),
-      permissions: JSON.parse(String(row.permissions)) as string[],
+      permissions: Array.isArray(row.permissions) ? (row.permissions as string[]) : [],
     }));
   });
 }

@@ -33,7 +33,7 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     const config = loadConfig({
       NODE_ENV: 'test',
       DATABASE_URL: databaseUrl!,
-      LOG_LEVEL: 'info',
+      LOG_LEVEL: 'silent',
       EMAIL_DRIVER: 'dev',
       EMAIL_DEV_OUTBOX: 'true',
       TOTP_ENCRYPTION_KEY: 'a'.repeat(64),
@@ -357,14 +357,14 @@ describe.skipIf(!databaseUrl)('multi-tenant integration and RLS', () => {
     try {
       await client.query('BEGIN');
       await client.query('SELECT set_config($1, $2, true)', ['app.tenant_id', tenantA.tenantId]);
-      const a = await client.query('SELECT id FROM companies');
+      const a = await client.query('SELECT id, tenant_id FROM companies');
       expect(a.rows).toHaveLength(1);
       expect(String(a.rows[0]!.tenant_id)).toBe(tenantA.tenantId);
       await client.query('COMMIT');
 
       await client.query('BEGIN');
       await client.query('SELECT set_config($1, $2, true)', ['app.tenant_id', tenantB.tenantId]);
-      const b = await client.query('SELECT id FROM companies');
+      const b = await client.query('SELECT id, tenant_id FROM companies');
       expect(b.rows).toHaveLength(1);
       expect(String(b.rows[0]!.tenant_id)).toBe(tenantB.tenantId);
       await client.query('COMMIT');
