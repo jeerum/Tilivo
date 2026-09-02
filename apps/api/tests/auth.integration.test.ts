@@ -100,12 +100,12 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
     return String(body);
   }
 
-  async function registerAndVerify(email = nextEmail()): Promise<string> {
+  async function registerAndVerify(email = nextEmail(), ip = `10.0.${100 + emailCounter}.10`): Promise<string> {
     const register = await inject({
       method: 'POST',
       url: '/api/v1/auth/register',
       payload: { email, password: PASSWORD },
-      ip: '10.0.0.10',
+      ip,
     });
     expect(register.status).toBe(202);
     const token = parseTokenFromBody(await lastEmailBody(email));
@@ -113,7 +113,7 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
       method: 'POST',
       url: '/api/v1/auth/email/verify',
       payload: { token },
-      ip: '10.0.0.10',
+      ip,
     });
     expect(verify.status).toBe(200);
     return email;
@@ -123,7 +123,7 @@ describe.skipIf(!databaseUrl)('identity integration', () => {
     email: string,
     password = PASSWORD,
     extra: Record<string, unknown> = {},
-    ip = '10.0.0.11',
+    ip = `10.0.${100 + emailCounter}.11`,
   ) {
     return inject({
       method: 'POST',

@@ -85,21 +85,6 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
     reply.header('x-trace-id', request.id);
   });
 
-  await app.register(rootRoutes, { version: config.API_VERSION });
-  await app.register(healthRoutes, {
-    db,
-    version: config.API_VERSION,
-    environment: config.NODE_ENV,
-    exposeDetails: config.NODE_ENV !== 'production',
-  });
-
-  const emailProvider = createEmailProvider(config.EMAIL_DRIVER, config.EMAIL_DEV_OUTBOX, db);
-  await app.register(authRoutes, {
-    db,
-    emailProvider,
-    config,
-  });
-
   app.setNotFoundHandler((request, reply) => {
     request.log.warn({ action: 'route_not_found', path: request.url }, 'route not found');
     reply.code(404);
@@ -150,5 +135,19 @@ export async function buildApp({ config, db }: BuildAppOptions): Promise<Fastify
     );
   });
 
+  await app.register(rootRoutes, { version: config.API_VERSION });
+  await app.register(healthRoutes, {
+    db,
+    version: config.API_VERSION,
+    environment: config.NODE_ENV,
+    exposeDetails: config.NODE_ENV !== 'production',
+  });
+
+  const emailProvider = createEmailProvider(config.EMAIL_DRIVER, config.EMAIL_DEV_OUTBOX, db);
+  await app.register(authRoutes, {
+    db,
+    emailProvider,
+    config,
+  });
   return app;
 }
