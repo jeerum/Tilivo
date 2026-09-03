@@ -17,6 +17,13 @@ import {
   listCustomers,
   listInvoices,
   listSeries,
+  salesLedger,
+  recordSalesPayment,
+  createSalesReminder,
+  listSalesReminders,
+  createRecurringTemplate,
+  listRecurringTemplates,
+  generateDueRecurringInvoices,
   retryInvoicePdf,
   setCustomerActive,
   updateCustomer,
@@ -508,5 +515,118 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
       metadata: { invoice_id: invoiceId, pdf_status: String(pdf.status) },
     });
     return { pdf };
+  });
+
+  app.get('/api/v1/sales/ledger', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const query = request.query as Record<string, unknown>;
+    const result = await salesLedger(db, tenantId, {
+      status: typeof query.status === 'string' ? query.status.toUpperCase() : undefined,
+      documentType: typeof query.document_type === 'string' ? query.document_type.toUpperCase() : undefined,
+      unpaid: query.unpaid === 'true',
+      overdue: query.overdue === 'true',
+      search: typeof query.search === 'string' ? query.search : undefined,
+      from: typeof query.from === 'string' ? query.from : undefined,
+      to: typeof query.to === 'string' ? query.to : undefined,
+      limit: Math.min(Math.max(Number(query.limit ?? 100) || 100, 1), 500),
+      offset: Math.max(Number(query.offset ?? 0) || 0, 0),
+    });
+    return result;
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>('/api/v1/sales/invoices/:id/payments', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.payment.record');
+    const invoiceId = uuidParam(request.params.id);
+    const body = request.body ?? {};
+    const amount = typeof body.amount === 'string' ? body.amount : '';
+    const paymentDate = typeof body.payment_date === 'string' ? body.payment_date : '';
+    if (!amount || !paymentDate) throw new AppError(ErrorCodes.invalidRequest, 'Amount and payment date are required', 400);
+    const result = await recordSalesPayment(db, tenantId, invoiceId, userId, {
+      amount,
+      paymentDate,
+      method: typeof body.method === 'string' ? body.method : 'MANUAL',
+      reference: typeof body.reference === 'string' ? body.reference : undefined,
+      note: typeof body.note === 'string' ? body.note : undefined,
+    });
+    await writeAuditEvent(db, 'SALES_PAYMENT.RECORDED', request, {
+      userId,
+      tenantId,
+      objectType: 'sales_invoice',
+      objectId: invoiceId,
+      metadata: { invoice_id: invoiceId, amount, status: result.status },
+    });
+    return { payment: result.payment, payment_status: result.status, amount_paid: result.amount_paid };
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>('/api/v1/sales/invoices/:id/reminders', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.reminder.create');
+    const invoiceId = uuidParam(request.params.id);
+    const body = request.body ?? {};
+    const result = await createSalesReminder(db, tenantId, invoiceId, userId, {
+      note: typeof body.note === 'string' ? body.note : undefined,
+      level: typeof body.level === 'number' ? body.level : undefined,
+    });
+    await writeAuditEvent(db, 'SALES_REMINDER.CREATED', request, {
+      userId,
+      tenantId,
+      objectType: 'sales_invoice',
+      objectId: invoiceId,
+      metadata: { invoice_id: invoiceId, reminder_id: String(result.reminder.id) },
+    });
+    return result;
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/reminders', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const reminders = await listSalesReminders(db, tenantId, uuidParam(request.params.id));
+    return { reminders };
+  });
+
+  app.get('/api/v1/sales/recurring-templates', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const templates = await listRecurringTemplates(db, tenantId);
+    return { templates };
+  });
+
+  app.post<{ Body: Record<string, unknown> }>('/api/v1/sales/recurring-templates', async (request, reply) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.recurring.manage');
+    const body = request.body ?? {};
+    const template = await createRecurringTemplate(db, tenantId, userId, {
+      customerId: String(body.customer_id),
+      name: String(body.name),
+      frequency: String(body.frequency ?? 'MONTHLY'),
+      startDate: String(body.start_date),
+      endDate: typeof body.end_date === 'string' ? body.end_date : undefined,
+      language: typeof body.language === 'string' ? body.language : 'fi',
+      paymentTermsDays: typeof body.payment_terms_days === 'number' ? body.payment_terms_days : 14,
+      lines: Array.isArray(body.lines) ? (body.lines as any[]) : [],
+    });
+    await writeAuditEvent(db, 'RECURRING_TEMPLATE.CREATED', request, {
+      userId,
+      tenantId,
+      objectType: 'recurring_template',
+      objectId: String(template.id),
+      metadata: { template_id: String(template.id), name: String(template.name) },
+    });
+    return reply.code(201).send({ template });
+  });
+
+  app.post('/api/v1/sales/recurring-templates/generate', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.recurring.manage');
+    const generated = await generateDueRecurringInvoices(db, tenantId, userId);
+    await writeAuditEvent(db, 'RECURRING_INVOICE.GENERATED', request, {
+      userId,
+      tenantId,
+      objectType: 'recurring_template',
+      metadata: { count: generated.length },
+    });
+    return { generated };
   });
 }

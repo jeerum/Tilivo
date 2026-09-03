@@ -49,6 +49,9 @@ export const TENANT_PERMISSIONS = [
   'tax.report.read',
   'purchase.classify',
   'purchase.classification.apply',
+  'sales.payment.record',
+  'sales.reminder.create',
+  'sales.recurring.manage',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -110,6 +113,9 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'tax.report.read',
       'purchase.classify',
       'purchase.classification.apply',
+      'sales.payment.record',
+      'sales.reminder.create',
+      'sales.recurring.manage',
     ],
   },
   {
@@ -146,6 +152,9 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'tax.report.read',
       'purchase.classify',
       'purchase.classification.apply',
+      'sales.payment.record',
+      'sales.reminder.create',
+      'sales.recurring.manage',
     ],
   },
   {

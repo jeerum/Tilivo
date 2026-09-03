@@ -2,7 +2,18 @@
 
 ## Current version
 
-**v0.11 (AI Expense Classification) - COMPLETE / GATE PASS**
+**v0.12 (Sales Ledger 2.0) - COMPLETE / GATE PASS**
+
+Gate validated:
+- migrations `20260909000000_sales_ledger_v12` +
+  `20260909010000_sales_ledger_payment_update` (20 total);
+- API tests 198/198 PASS, 0 skipped (v0.12 integration 3 plus full
+  regression v0.5-v0.11);
+- web unit tests 16/16 PASS; lint/typecheck/build PASS;
+- Playwright VAT + Receipts + AI + Sales Ledger 15/15 PASS
+  (desktop/tablet/mobile).
+
+Previous v0.11 gate:
 
 Gate validated:
 - migration `20260908000000_ai_classification_v11` (18 total);
@@ -74,6 +85,7 @@ Security review: v0.2 CRITICAL/HIGH 0 open
 - v0.9 VAT / ALV Engine (see below).
 - v0.10 Purchases & Receipts (see below).
 - v0.11 AI Expense Classification (see below).
+- v0.12 Sales Ledger 2.0 (see below).
 
 ## v0.5 Accounting Core
 
@@ -343,6 +355,15 @@ ehitatakse täisväärtuslikku Soome raamatupidamistarkvara.
   failure fallback keeps manual workflow usable.
 - Unit 5, integration 4, web 16, Playwright VAT+Receipts+AI 12/12;
   full API regression 195/195 PASS, 0 skipped.
+
+## v0.12 Sales Ledger 2.0
+
+- Document types, payment status/amount fields, AR ledger + summary,
+  manual non-bank payment records, reminders with history, recurring
+  monthly/quarterly/yearly templates and deterministic draft generation.
+- Bank-detail settings columns; payments stay v0.13-banking-ready.
+- Integration 3, browser E2E 15/15 (VAT + Receipts + AI + Sales Ledger);
+  full API regression 198/198 PASS, 0 skipped.
 
 ## Tests
 

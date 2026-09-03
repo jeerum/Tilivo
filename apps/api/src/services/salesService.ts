@@ -84,6 +84,10 @@ export interface SalesSettingsPatch {
   default_language?: string;
   default_currency?: string;
   payment_reference_type?: PaymentReferenceType;
+  bank_iban?: string | null;
+  bank_bic?: string | null;
+  bank_account_holder?: string | null;
+  advance_payments_received_account_id?: string | null;
 }
 
 const today = (): string => {
@@ -1665,7 +1669,17 @@ export async function listInvoices(
       [...values, limit, offset],
     );
     return {
-      invoices: rows.rows.map((row: any) => normalizeDateFields(row)),
+      invoices: rows.rows.map((row: any) => {
+        const normalized = normalizeDateFields(row);
+        const total = new Decimal(String(normalized.total ?? '0'));
+        const paid = new Decimal(String(normalized.amount_paid ?? '0'));
+        const balance = total.minus(paid);
+        return {
+          ...normalized,
+          amount_paid: paid.toFixed(2),
+          open_balance: balance.greaterThan(0) ? balance.toFixed(2) : '0.00',
+        };
+      }),
       total: Number(total.rows[0]?.total ?? 0),
     };
   });
@@ -1799,4 +1813,284 @@ export async function getInvoiceForPdf(client: DbClient, tenantId: string, invoi
     ...normalizeDateFields(invoice),
     lines: lines.rows.map((line: any) => normalizeDateFields(line)),
   };
+}
+
+function overdueDays(invoice: any, today = new Date().toISOString().slice(0, 10)): number {
+  const due = String(invoice.due_date ?? '').slice(0, 10);
+  if (!due || !['ISSUED', 'PARTIALLY_PAID', 'PAID', 'OVERPAID'].includes(String(invoice.status))) return 0;
+  if (Number(invoice.amount_paid ?? 0) >= Number(invoice.total ?? 0)) return 0;
+  return Math.max(0, Math.floor((Date.parse(today) - Date.parse(due)) / 86_400_000));
+}
+
+export async function salesLedger(
+  pool: Db,
+  tenantId: string,
+  filters: { status?: string; documentType?: string; unpaid?: boolean; overdue?: boolean; search?: string; from?: string; to?: string; limit?: number; offset?: number } = {},
+): Promise<{ invoices: any[]; total: number; summary: { outstanding: string; overdue: string; paidThisPeriod: string } }> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const clauses: string[] = [`i.tenant_id = $1`];
+    const values: unknown[] = [tenantId];
+    if (filters.status) {
+      values.push(filters.status);
+      clauses.push(`i.status = $${values.length}`);
+    }
+    if (filters.documentType) {
+      values.push(filters.documentType);
+      clauses.push(`i.document_type = $${values.length}`);
+    }
+    if (filters.unpaid) {
+      clauses.push(`i.status IN ('ISSUED','PARTIALLY_PAID')`);
+    }
+    if (filters.search) {
+      values.push(`%${filters.search}%`);
+      clauses.push(`(i.invoice_number ILIKE $${values.length} OR bp.name ILIKE $${values.length})`);
+    }
+    if (filters.from) {
+      values.push(filters.from);
+      clauses.push(`i.issue_date >= $${values.length}::date`);
+    }
+    if (filters.to) {
+      values.push(filters.to);
+      clauses.push(`i.issue_date <= $${values.length}::date`);
+    }
+    const join = `JOIN business_parties bp ON bp.id = i.customer_id AND bp.tenant_id = i.tenant_id`;
+    const where = `WHERE ${clauses.join(' AND ')}`;
+    const total = await client.query(`SELECT count(*)::int AS total FROM sales_invoices i ${join} ${where}`, values);
+    const summary = await client.query(
+      `SELECT
+         COALESCE(sum(CASE WHEN i.status IN ('ISSUED','PARTIALLY_PAID') THEN i.total - i.amount_paid ELSE 0 END),0)::text AS outstanding,
+         COALESCE(sum(CASE WHEN i.status IN ('ISSUED','PARTIALLY_PAID') AND i.due_date < current_date THEN i.total - i.amount_paid ELSE 0 END),0)::text AS overdue
+       FROM sales_invoices i ${join} ${where}`,
+      values,
+    );
+    const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+    const offset = Math.max(filters.offset ?? 0, 0);
+    const rows = await client.query(
+      `SELECT i.*, bp.name AS customer_name,
+              (SELECT COALESCE(sum(amount),0)::text FROM sales_invoice_payments p WHERE p.invoice_id = i.id AND p.tenant_id = i.tenant_id) AS paid_total
+       FROM sales_invoices i ${join} ${where}
+       ORDER BY i.issue_date DESC NULLS LAST, i.created_at DESC
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, limit, offset],
+    );
+    const invoices = rows.rows.map((row: any) => {
+      const paid = new Decimal(String(row.amount_paid ?? '0'));
+      const totalAmount = new Decimal(String(row.total ?? '0'));
+      const balance = totalAmount.minus(paid);
+      return {
+        ...row,
+        amount_paid: paid.toFixed(2),
+        open_balance: balance.greaterThan(0) ? balance.toFixed(2) : '0.00',
+        overdue_days: overdueDays({ ...row, amount_paid: paid.toString() }),
+      };
+    });
+    return {
+      invoices,
+      total: Number(total.rows[0]?.total ?? 0),
+      summary: {
+        outstanding: summary.rows[0]?.outstanding ?? '0.00',
+        overdue: summary.rows[0]?.overdue ?? '0.00',
+        paidThisPeriod: '0.00',
+      },
+    };
+  });
+}
+
+export async function recordSalesPayment(
+  pool: Db,
+  tenantId: string,
+  invoiceId: string,
+  userId: string,
+  input: { amount: string; paymentDate: string; method?: string; reference?: string; note?: string },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const invoice = await client.query(
+      `SELECT * FROM sales_invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [invoiceId, tenantId],
+    );
+    if (!invoice.rows[0]) throw new AppError(ErrorCodes.invoiceNotFound, 'Invoice not found', 404);
+    const row = invoice.rows[0];
+    if (!['ISSUED', 'PARTIALLY_PAID'].includes(String(row.status))) {
+      throw new AppError(ErrorCodes.invoiceNotDraft, 'Only issued invoices can receive payments', 409);
+    }
+    const amount = new Decimal(input.amount);
+    const total = new Decimal(String(row.total ?? '0'));
+    const paid = new Decimal(String(row.amount_paid ?? '0')).plus(amount);
+    if (amount.lessThanOrEqualTo(0) || paid.greaterThan(total)) {
+      throw new AppError(ErrorCodes.invalidRequest, 'Payment amount exceeds open balance', 400);
+    }
+    const inserted = await client.query(
+      `INSERT INTO sales_invoice_payments
+         (tenant_id, invoice_id, amount, payment_date, method, reference, note, is_manual, created_by)
+       VALUES ($1,$2,$3,$4::date,$5,$6,$7,true,$8) RETURNING *`,
+      [tenantId, invoiceId, amount.toFixed(2), input.paymentDate, input.method ?? 'MANUAL', input.reference ?? null, input.note ?? null, userId],
+    );
+    const status = paid.greaterThanOrEqualTo(total) ? 'PAID' : 'PARTIALLY_PAID';
+    await client.query(
+      `UPDATE sales_invoices SET amount_paid = $3, payment_status = $4, paid_at = CASE WHEN $4 = 'PAID' THEN now() ELSE paid_at END
+       WHERE id = $1 AND tenant_id = $2`,
+      [invoiceId, tenantId, paid.toFixed(2), status],
+    );
+    return { payment: inserted.rows[0], status, amount_paid: paid.toFixed(2) };
+  });
+}
+
+export async function createSalesReminder(
+  pool: Db,
+  tenantId: string,
+  invoiceId: string,
+  userId: string,
+  input: { note?: string; level?: number },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const invoice = await client.query(
+      `SELECT i.*, bp.name AS customer_name, bp.email FROM sales_invoices i
+       JOIN business_parties bp ON bp.id = i.customer_id AND bp.tenant_id = i.tenant_id
+       WHERE i.id = $1 AND i.tenant_id = $2`,
+      [invoiceId, tenantId],
+    );
+    if (!invoice.rows[0]) throw new AppError(ErrorCodes.invoiceNotFound, 'Invoice not found', 404);
+    const row = invoice.rows[0];
+    const open = new Decimal(String(row.total ?? '0')).minus(new Decimal(String(row.amount_paid ?? '0')));
+    if (open.lessThanOrEqualTo(0)) throw new AppError(ErrorCodes.invalidRequest, 'Invoice has no open balance', 400);
+    const level = Number(input.level ?? 1);
+    const result = await client.query(
+      `INSERT INTO sales_reminders
+         (tenant_id, invoice_id, level, amount_due, status, note, recipient, created_by)
+       VALUES ($1,$2,$3,$4,'DRAFT',$5,$6,$7) RETURNING *`,
+      [tenantId, invoiceId, level, open.toFixed(2), input.note ?? null, row.email ?? null, userId],
+    );
+    return { reminder: result.rows[0], customer_name: row.customer_name };
+  });
+}
+
+export async function listSalesReminders(pool: Db, tenantId: string, invoiceId: string): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      `SELECT * FROM sales_reminders WHERE tenant_id = $1 AND invoice_id = $2 ORDER BY level, created_at`,
+      [tenantId, invoiceId],
+    );
+    return result.rows;
+  });
+}
+
+function nextRun(frequency: string, from: string): string {
+  const date = new Date(`${from}T00:00:00Z`);
+  if (frequency === 'MONTHLY') date.setUTCMonth(date.getUTCMonth() + 1);
+  else if (frequency === 'QUARTERLY') date.setUTCMonth(date.getUTCMonth() + 3);
+  else date.setUTCFullYear(date.getUTCFullYear() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+export async function createRecurringTemplate(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  input: { customerId: string; name: string; frequency: string; startDate: string; endDate?: string; language?: string; paymentTermsDays?: number; lines: Array<{ description: string; quantity: string; unit?: string; unit_price: string; tax_code_id: string; discount_percent?: string }> },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const customer = await client.query(
+      `SELECT id FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_customer`,
+      [input.customerId, tenantId],
+    );
+    if (!customer.rows[0]) throw new AppError(ErrorCodes.customerNotFound, 'Customer not found', 404);
+    const template = await client.query(
+      `INSERT INTO recurring_invoice_templates
+         (tenant_id, customer_id, name, frequency, start_date, end_date, next_run_date,
+          language, payment_terms_days, is_active, created_by)
+       VALUES ($1,$2,$3,$4,$5::date,$6::date,$5::date,$7,$8,true,$9) RETURNING *`,
+      [tenantId, input.customerId, input.name, input.frequency, input.startDate, input.endDate ?? null, input.language ?? 'fi', input.paymentTermsDays ?? 14, userId],
+    );
+    const templateId = String(template.rows[0].id);
+    let n = 1;
+    for (const line of input.lines) {
+      await client.query(
+        `INSERT INTO recurring_invoice_lines
+           (tenant_id, template_id, line_number, description, quantity, unit, unit_price,
+            discount_percent, tax_code_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, templateId, n, line.description, line.quantity, line.unit ?? '', line.unit_price, line.discount_percent ?? '0', line.tax_code_id],
+      );
+      n += 1;
+    }
+    return template.rows[0];
+  });
+}
+
+export async function listRecurringTemplates(pool: Db, tenantId: string): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      `SELECT t.*, bp.name AS customer_name FROM recurring_invoice_templates t
+       JOIN business_parties bp ON bp.id = t.customer_id AND bp.tenant_id = t.tenant_id
+       WHERE t.tenant_id = $1 ORDER BY t.next_run_date`,
+      [tenantId],
+    );
+    return result.rows;
+  });
+}
+
+export async function generateDueRecurringInvoices(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  asOf = new Date().toISOString().slice(0, 10),
+): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const due = await client.query(
+      `SELECT t.* FROM recurring_invoice_templates t
+       WHERE t.tenant_id = $1 AND t.is_active AND t.next_run_date <= $2::date
+       ORDER BY t.next_run_date FOR UPDATE OF t`,
+      [tenantId, asOf],
+    );
+    const generated: any[] = [];
+    for (const template of due.rows) {
+      const nextDate = toDateString(template.next_run_date);
+      const key = `${template.id}:${nextDate}`;
+      const existing = await client.query(
+        `SELECT id FROM sales_invoices WHERE tenant_id = $1 AND source_recurring_key = $2`,
+        [tenantId, key],
+      );
+      if (existing.rows[0]) continue;
+      const lines = await client.query(
+        `SELECT description, quantity, unit, unit_price, discount_percent, tax_code_id
+         FROM recurring_invoice_lines WHERE template_id = $1 ORDER BY line_number`,
+        [template.id],
+      );
+      const inserted = await client.query(
+        `INSERT INTO sales_invoices
+           (tenant_id, company_id, customer_id, status, series_id, issue_date, due_date,
+            currency_code, language, customer_snapshot, document_type, payment_status,
+            source_recurring_template_id, source_recurring_key, created_by)
+         VALUES ($1,
+                 (SELECT company_id FROM sales_settings WHERE tenant_id = $1),
+                 $2,'DRAFT',
+                 (SELECT default_invoice_series_id FROM sales_settings WHERE tenant_id = $1),
+                 $3::date,
+                 ($3::date + ($4::text || ' days')::interval)::date,
+                 'EUR',$5,
+                 COALESCE((SELECT jsonb_build_object('name', name, 'language', language) FROM business_parties WHERE id = $2 AND tenant_id = $1), '{}'),
+                 'SALES_INVOICE','UNPAID',$6,$7,$8)
+         RETURNING *`,
+        [tenantId, template.customer_id, nextDate, template.payment_terms_days, template.language, template.id, key, userId],
+      );
+      const invoiceId = String(inserted.rows[0].id);
+      let n = 1;
+      for (const line of lines.rows) {
+        await client.query(
+          `INSERT INTO sales_invoice_lines
+             (tenant_id, sales_invoice_id, line_number, description, quantity, unit, unit_price,
+              discount_percent, tax_code_id, net_amount, tax_amount, gross_amount)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,0)`,
+          [tenantId, invoiceId, n, line.description, line.quantity, line.unit ?? '', line.unit_price, line.discount_percent ?? '0', line.tax_code_id],
+        );
+        n += 1;
+      }
+      await client.query(
+        `UPDATE recurring_invoice_templates SET next_run_date = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2`,
+        [template.id, tenantId, nextRun(String(template.frequency), nextDate)],
+      );
+      generated.push({ template_id: template.id, invoice_id: invoiceId });
+    }
+    return generated;
+  });
 }

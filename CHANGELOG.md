@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0] - 2026-09-03
+
+- Sales Ledger 2.0: document types (invoice/credit/advance/recurring),
+  payment status + manual payment records, AR ledger/summary, reminders,
+  recurring monthly/quarterly/yearly templates with idempotent draft
+  generation.
+- New permissions `sales.payment.record`, `sales.reminder.create`,
+  `sales.recurring.manage`; bank-detail settings columns.
+- Migrations `20260909000000_sales_ledger_v12` +
+  `20260909010000_sales_ledger_payment_update` (20 total).
+- Tests: v0.12 integration 3, browser E2E 15/15 across VAT/Receipts/AI/Sales
+  Ledger; full API 198/198 PASS.
+
 ## [0.11.0] - 2026-09-03
 
 - AI expense classification: provider abstraction with deterministic mock,

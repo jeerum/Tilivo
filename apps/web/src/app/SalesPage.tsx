@@ -86,6 +86,10 @@ interface SalesInvoice {
   subtotal: string;
   tax_total: string;
   total: string;
+  amount_paid?: string;
+  open_balance?: string;
+  payment_status?: string;
+  document_type?: string;
   accounting_journal_entry_id: string | null;
   credit_of_invoice_id: string | null;
   credited_by_invoice_id: string | null;
@@ -816,6 +820,8 @@ export function SalesPage() {
                 <th>{t('issueDate')}</th>
                 <th>{t('dueDate')}</th>
                 <th>{t('total')}</th>
+                <th>{t('paid')}</th>
+                <th>{t('openBalance')}</th>
                 <th>{t('status')}</th>
                 <th>{t('actions')}</th>
               </tr>
@@ -828,6 +834,8 @@ export function SalesPage() {
                   <td>{invoice.issue_date ?? '–'}</td>
                   <td>{invoice.due_date}</td>
                   <td className="num">{money(invoice.total)}</td>
+                  <td className="num">{money(invoice.amount_paid ?? '0')}</td>
+                  <td className="num">{money(invoice.open_balance ?? invoice.total)}</td>
                   <td>{t(String(invoice.status).toLowerCase() as any)}</td>
                   <td>
                     <button type="button" onClick={() => void openInvoice(invoice.id)}>{t('openInvoice')}</button>
