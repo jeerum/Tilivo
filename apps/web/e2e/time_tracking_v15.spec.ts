@@ -12,6 +12,7 @@ test.describe('v0.15 Time Tracking', () => {
     await expect(page.getByText('Employee created.')).toBeVisible();
     await page.goto('/time-tracking');
     await expect(page.getByTestId('time-tracking-page')).toBeVisible();
+    await page.getByLabel('Employee').selectOption({ label: `Time QA ${suffix}` });
     await page.getByLabel('Minutes').fill('480');
     await page.getByLabel('Break').fill('30');
     await page.getByRole('button', { name: 'Save entry' }).click();
@@ -25,6 +26,6 @@ test.describe('v0.15 Time Tracking', () => {
     await page.getByRole('button', { name: 'Create current timesheet' }).click();
     await expect(page.getByText('Timesheet created.')).toBeVisible();
     await page.getByRole('button', { name: 'Submit' }).click();
-    await expect(page.getByText('SUBMITTED')).toBeVisible();
+    await expect(page.locator('tbody tr').filter({ hasText: `Time QA ${suffix}` }).getByText('SUBMITTED')).toBeVisible();
   });
 });
