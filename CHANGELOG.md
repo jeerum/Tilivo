@@ -18,6 +18,11 @@
   `20260907010000_purchase_merchant_review`.
 - Docs `PURCHASES_RECEIPTS.md` + gap analysis; status/changelog updated.
 - Tests: v0.10 unit 9, integration 6, browser E2E desktop/tablet/mobile.
+- Production deploy (2026-09-03): backup + restore-verify PASS, code
+  synced to `/opt/tilivo`, `remote-deploy.sh` PASS, migrations
+  `20260907000000_purchases_receipts_v10` +
+  `20260907010000_purchase_merchant_review` (15 -> 17), smoke PASS;
+  other host services untouched.
 
 ## [0.9.0] - 2026-09-03
 

@@ -372,6 +372,12 @@ Production v0.4 backup copy -> migrate -> data preservation: PASS
     kood sünkroniseeritud, `remote-deploy.sh` PASS, migratsioon ainult
     `20260906000000_vat_engine_v09` (14 -> 15), production VAT Playwright
     6/6 PASS (desktop/tablet/mobile), teised serveriteenused puutumata.
+  - v0.10 deployed production (2026-09-03): backup + restore-verify PASS,
+    kood sünkroniseeritud, `remote-deploy.sh` PASS, migratsioonid
+    `20260907000000_purchases_receipts_v10` +
+    `20260907010000_purchase_merchant_review` (15 -> 17), smoke PASS;
+    production Receipts Playwright 3/3 PASS (desktop/tablet/mobile),
+    teised serveriteenused puutumata.
 - Production test tenant cleanup complete; QA tenants (Tilivo QA Tenant,
   E2E Switch Tenant, E2E Accounting QA Tenant) are intentional fixtures.
 
