@@ -369,3 +369,9 @@
 ### Deploy
 
 - Esimene isoleeritud v0.1 deploy VPS-ile (`/opt/mrjkp-accounting`), pordid 3100/3101 localhostis.
+# v0.13 — Banking
+
+- Added Banking navigation and responsive workspace for accounts, imports, history, transactions, reconciliation and settings.
+- Added CSV/CAMT.053 preview/confirm flow, transaction detail, suggestions, allocation editor and review-no-post.
+- Added Banking Playwright workspace coverage for desktop/tablet/mobile projects.
+- Documented posting, matching, idempotency, period locks, audit/RBAC and Open Banking/payment-initiation boundaries.

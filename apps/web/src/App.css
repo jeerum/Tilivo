@@ -15,6 +15,28 @@
   box-sizing: border-box;
 }
 
+.banking-page .page-heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; }
+.banking-page .compact { min-width: 220px; }
+.banking-grid { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 16px; }
+.banking-page h3 { margin-top: 0; }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 0 0 16px; }
+.metric-grid > div { background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; padding: 12px; }
+.metric-grid span { display: block; color: #5b6770; font-size: 12px; }
+.metric-grid strong { display: block; margin-top: 4px; font-size: 18px; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.filter-bar input { flex: 1 1 220px; }
+.clickable { cursor: pointer; }
+.clickable:hover { background: #f5f8fb; }
+.status-pill { background: #eef2f6; border-radius: 999px; padding: 4px 8px; white-space: nowrap; font-size: 12px; }
+.positive { color: #1e8e3e; }.negative { color: #b3261e; }
+.banking-detail { position: fixed; inset: 4vh 4vw 4vh auto; width: min(620px, 92vw); overflow: auto; background: #fff; padding: 28px; box-shadow: -8px 0 28px rgb(16 24 40 / 14%); }
+.close-button { float: right; font-size: 24px; border: 0; background: transparent; cursor: pointer; }
+.suggestion { display: grid; gap: 4px; padding: 12px; border: 1px solid #d9e0e6; border-radius: 8px; margin: 8px 0; }
+.suggestion small { color: #5b6770; }.allocation-total, .allocation-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #edf0f2; }
+.import-preview { margin-top: 16px; }.banking-page .table-scroll { overflow-x: auto; }
+@media (max-width: 800px) { .banking-grid { grid-template-columns: 1fr; }.banking-page .page-heading { align-items: stretch; flex-direction: column; }.banking-page .compact { min-width: 0; } }
+@media (max-width: 520px) { .banking-page { padding-left: 12px; padding-right: 12px; }.banking-page .tab-bar { overflow-x: auto; flex-wrap: nowrap; }.banking-page .tab-button { white-space: nowrap; }.banking-detail { inset: 0; width: 100%; padding: 20px 14px; }.filter-bar { display: grid; }.filter-bar input, .filter-bar select { width: 100%; }.metric-grid { grid-template-columns: repeat(2, 1fr); }.metric-grid > div { padding: 9px; }.data-table { min-width: 760px; } }
+
 body {
   margin: 0;
 }

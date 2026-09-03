@@ -166,7 +166,7 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     // Release migrations after v0.4: accounting core, hardening, tax
     // uniqueness, v0.6 sales core, v0.7 purchases core, v0.7.5 registry,
     // v0.8-v0.11 and v0.12 sales ledger migrations.
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 14);
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 15);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(

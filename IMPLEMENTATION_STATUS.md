@@ -1,5 +1,11 @@
 # Implementatsiooni staatus
 
+## v0.13 Banking
+
+Banking backend foundation and responsive Banking UI are implemented: account management, CSV/CAMT preview/import, history, transaction filters, detail/reconciliation allocations, deterministic suggestions, classifications, review-no-post, summary and settings mappings. Final automated and integration gate verification remains.
+
+QA follow-up: **E2E/API Test Isolation Hardening** remains separate work for suite-isolated schemas/databases, deterministic tenant cleanup, default mock providers, dynamic auth bootstrap and worker/outbox isolation.
+
 ## Current version
 
 **v0.12 (Sales Ledger 2.0) - COMPLETE / GATE PASS**

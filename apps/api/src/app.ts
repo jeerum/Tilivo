@@ -17,6 +17,7 @@ import { tenantRoutes } from './routes/tenant';
 import { documentRoutes } from './routes/documents';
 import { accountingRoutes } from './routes/accounting';
 import { salesRoutes } from './routes/sales';
+import { bankingRoutes } from './routes/banking';
 import { purchaseRoutes } from './routes/purchases';
 import { businessRegistryRoutes } from './routes/businessRegistry';
 import { createEmailProvider } from './services/emailProvider';
@@ -204,6 +205,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
   await app.register(accountingRoutes, { db, config });
   await app.register(salesRoutes, { db, config, storage, emailProvider });
+  await app.register(bankingRoutes, { db, config });
   await app.register(purchaseRoutes, { db, config, storage });
   await app.register(businessRegistryRoutes, {
     db,

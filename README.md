@@ -1,5 +1,7 @@
 # Tilivo
 
+Current release work: v0.13 Banking UI and verification. See [`docs/BANKING.md`](docs/BANKING.md).
+
 Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on
 **v0.12 (Sales Ledger 2.0) – COMPLETE / GATE PASS**; täpne staatus:
 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). Alates **v0.7.5** kehtib uus plaan

@@ -54,6 +54,11 @@ export const TENANT_PERMISSIONS = [
   'sales.recurring.manage',
   'sales.invoice.send',
   'sales.einvoice.export',
+  'banking.read',
+  'banking.import',
+  'banking.match',
+  'banking.post',
+  'banking.accounts.manage',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -120,6 +125,11 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'sales.recurring.manage',
       'sales.invoice.send',
       'sales.einvoice.export',
+      'banking.read',
+      'banking.import',
+      'banking.match',
+      'banking.post',
+      'banking.accounts.manage',
     ],
   },
   {
@@ -161,6 +171,11 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'sales.recurring.manage',
       'sales.invoice.send',
       'sales.einvoice.export',
+      'banking.read',
+      'banking.import',
+      'banking.match',
+      'banking.post',
+      'banking.accounts.manage',
     ],
   },
   {
