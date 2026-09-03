@@ -2,6 +2,12 @@
 
 Kehtiv alates 2026-09-03.
 
+## v0.15 Time Tracking
+
+Work time, absence buckets, timesheets and approval/locking are complete. The
+module is the later payroll and project reporting input source; payroll
+calculation itself is future scope.
+
 ## v0.14 Employee Registry
 
 Employee and employment master data are complete for this release. Payroll

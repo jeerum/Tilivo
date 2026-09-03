@@ -64,6 +64,7 @@ export const TENANT_PERMISSIONS = [
   'employees.update',
   'employees.manage_sensitive',
   'employees.terminate',
+  'time.read', 'time.create', 'time.update', 'time.submit', 'time.approve', 'time.lock', 'time.manage_all',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -140,6 +141,7 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'employees.update',
       'employees.manage_sensitive',
       'employees.terminate',
+      'time.read', 'time.create', 'time.update', 'time.submit', 'time.approve', 'time.lock', 'time.manage_all',
     ],
   },
   {
@@ -191,6 +193,7 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'employees.update',
       'employees.manage_sensitive',
       'employees.terminate',
+      'time.read', 'time.create', 'time.update', 'time.submit', 'time.approve', 'time.lock', 'time.manage_all',
     ],
   },
   {

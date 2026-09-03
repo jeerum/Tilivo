@@ -19,6 +19,7 @@ import { accountingRoutes } from './routes/accounting';
 import { salesRoutes } from './routes/sales';
 import { bankingRoutes } from './routes/banking';
 import { employeeRoutes } from './routes/employees';
+import { timeTrackingRoutes } from './routes/timeTracking';
 import { purchaseRoutes } from './routes/purchases';
 import { businessRegistryRoutes } from './routes/businessRegistry';
 import { createEmailProvider } from './services/emailProvider';
@@ -208,6 +209,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(salesRoutes, { db, config, storage, emailProvider });
   await app.register(bankingRoutes, { db, config });
   await app.register(employeeRoutes, { db, config });
+  await app.register(timeTrackingRoutes, { db, config });
   await app.register(purchaseRoutes, { db, config, storage });
   await app.register(businessRegistryRoutes, {
     db,

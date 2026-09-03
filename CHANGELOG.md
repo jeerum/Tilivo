@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0] - 2026-09-03
+
+- Added employee-linked time entries, work/absence categories, exact minute
+  durations, break validation and project/worksite readiness.
+- Added timesheet submission, approval, rejection, locking and reopening with
+  tenant isolation and audit history.
+
 ## [0.14.0] - 2026-09-03
 
 - Added tenant-scoped employee and employment registry with lifecycle actions,

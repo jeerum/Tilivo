@@ -11,6 +11,7 @@ const navItems = [
   { key: 'purchases', labelKey: 'purchases', href: '/purchases' },
   { key: 'banking', labelKey: 'banking', href: '/banking' },
   { key: 'employees', labelKey: 'employees', href: '/employees' },
+  { key: 'time-tracking', labelKey: 'timeTracking', href: '/time-tracking' },
   { key: 'settings', labelKey: 'settings', href: '/settings' },
 ] as const;
 

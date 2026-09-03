@@ -1,5 +1,9 @@
 # Implementatsiooni staatus
 
+## v0.15 Time Tracking
+
+Implemented work-time and absence capture, exact minute duration, break validation, employee linkage, project/worksite readiness, monthly timesheets, approval/locking lifecycle, RLS, RBAC and audit history. Payroll and statutory calculation remain outside this release. See [`docs/TIME_TRACKING.md`](docs/TIME_TRACKING.md).
+
 ## v0.14 Employee Registry
 
 Employee and employment master data are implemented with tenant isolation, lifecycle actions, protected sensitive fields, insurance/payroll-readiness metadata, audit events, API routes and responsive UI. See [`docs/EMPLOYEE_REGISTRY.md`](docs/EMPLOYEE_REGISTRY.md) and the explicit boundary list in [`docs/EMPLOYEE_REGISTRY_GAP.md`](docs/EMPLOYEE_REGISTRY_GAP.md).
