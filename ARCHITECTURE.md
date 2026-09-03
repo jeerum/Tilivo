@@ -79,6 +79,19 @@ Backend API (Fastify) – /api/v1, /api/v1/auth
 
 Frontend: `/sales` workspace (Customers / Invoices), ET/EN, desktop-first.
 
+## Backend moodulid v0.7 (Purchases)
+
+- `routes/purchases` – suppliers, purchase invoices, review/approve/post/reject/
+  correct, import, inbox ja dokumentide manustamine.
+- `services/purchaseService` – elutsükkel, tarnija matching, duplikaadid,
+  kinnitus- ja postitusloogika, reversal correction.
+- `services/purchaseInvoiceParsers` + `lib/secureXml` – Finvoice/PEPPOL/
+  TEAPPSXML adapterid canonical mudelisse; DTD/ENTITY keelatud, 1 MB piir.
+- `purchase_invoice_*` tabelid on RLS + FORCE ja komposiit-FK-ga; posted
+  ostuarve on immutable.
+- E-arve import on idempotentne: sama sündmus -> üks arve, üks kanne.
+- Frontend: `/purchases` workspace (Purchase invoices / Suppliers / Inbox).
+
 ## Deploy põhimõtted
 
 - Isoleeritud Docker Compose projekt (`tilivo`), oma network/volume/DB/kasutaja/pordid.

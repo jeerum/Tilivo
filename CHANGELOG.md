@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.0] - 2026-09-03
+
+- Supplier kasutab `business_parties` (`is_supplier`) koos
+  default_expense/default_tax lisadega.
+- Purchase schema: purchase_invoices/lines, documents, approvals,
+  extractions, corrections, imports, settings; RLS+FORCE ja komposiit-FK-d.
+- Lifecycle: INGESTED/DRAFT -> NEEDS_REVIEW -> READY_FOR_APPROVAL -> APPROVED
+  -> POSTED; reject, cancel, correction-reversal; posted immutable ka otse
+  SQL-i eest.
+- Approval: `require_separate_approver` ja `auto_post_on_approval`
+  tenant-seadistusena.
+- E-arve: secure XML, canonical model, Finvoice/PEPPOL/TEAPPSXML adapterid,
+  structured extraction read, deterministic supplier matching.
+- Duplicate/idempotency: inbox external key + source_external unique + tarnija
+  number/kuupäev unique; 20-parallel import -> üks arve.
+- Accounting: PURCHASE_INVOICE kanne läbi v0.5 mootori, input VAT ja
+  reverse-charge foundation, PURCHASE_CORRECTION reversal.
+- Desktop UI `/purchases` (invoices, suppliers, inbox; ET/EN).
+- Tests: parserid + XML hostile, lifecycle, approval SoD, races, RLS, upgrade.
+
 ## [0.6.0] - 2026-09-02
 
 - Sales schema: business_parties, invoice_number_series, sales_settings,

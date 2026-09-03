@@ -2,9 +2,10 @@
 
 ## Current version
 
-**v0.6 (Sales) - GATE PASS**
+**v0.7 (Purchases) - GATE PASS**
 
-v0.5 gate: **PASS**. v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 open
+v0.6 gate: **PASS**. v0.5 gate: **PASS**. v0.4 gate: **PASS**.
+Security review: v0.2 CRITICAL/HIGH 0 open
 (`docs/SECURITY_REVIEW_V0_2.md`).
 
 ## Completed
@@ -20,6 +21,7 @@ v0.5 gate: **PASS**. v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 
   backup/restore, Playwright desktop/mobile.
 - v0.5 Accounting Core (see below).
 - v0.6 Sales (see below).
+- v0.7 Purchases (see below).
 
 ## v0.5 Accounting Core
 
@@ -67,7 +69,6 @@ v0.5 gate: **PASS**. v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 
 ## Not started
 
 - v0.4 Audit & compliance edasiarendus
-- v0.7 Purchases / ostuarved
 - v0.8 Banking, v0.9 Payments, v0.10 FI VAT reporting/period close
 - Production SMTP driver
 
@@ -103,14 +104,40 @@ v0.5 gate: **PASS**. v0.4 gate: **PASS**. Security review: v0.2 CRITICAL/HIGH 0 
 - 100 parallel issue -> 100 unikaalset numbrit; double issue ja credit race
   -> täpselt üks õnnestumine; PDF duplicate job -> üks dokument.
 
+## v0.7 Purchases
+
+### Schema / invariants
+
+- Tenant-owned: purchase_invoices/lines/documents/approvals/extractions/
+  corrections/imports/settings; RLS + FORCE RLS ja komposiit-FK-d.
+- Supplier capability jääb `business_parties` mudelisse (`is_supplier`).
+- POSTED/APPROVED/CORRECTED on immutable; korrektsioon = reversal-journal.
+- E-arve idempotency: inbox external key + `(tenant, source_type,
+  source_external_id)` unique + tarnija number/kuupäev unique.
+
+### Engine / API / UI
+
+- Lifecycle review/approve/post/reject/correct; `require_separate_approver` ja
+  `auto_post_on_approval` tenant-seadistusena.
+- PURCHASE_INVOICE kanne (Expense/Input VAT/AP) läbi v0.5 mootori,
+  reverse-charge foundation, PURCHASE_CORRECTION reversal.
+- Secure XML + canonical Finvoice/PEPPOL/TEAPPSXML adapterid; OCR Noop
+  foundation; manual review ilma OCR-ita.
+- Desktop `/purchases`: invoices, suppliers, e-invoice import/inbox.
+
+### Katvus
+
+- Parser/XML security 9, purchase lifecycle integration 3, security/races 4
+  (server test DB); kogu regressioon täiendatud upgrade-testiga v0.4 -> v0.7.
+
 ## Tests
 
 ```text
 Local: API lint/typecheck/unit 25 PASS, web lint/typecheck/unit 6 PASS,
        web build PASS
-Server test DB (fresh reset each run): 96/96 PASS
-  - v0.4 -> v0.6 upgrade migration on scratch DB (data preservation, RLS,
-    grants, triggers, sales seed)
+Server test DB (fresh reset each run): PASS (kogu regressioon)
+  - v0.4 -> v0.7 upgrade migration on scratch DB (data preservation, RLS,
+    grants, triggers, sales + purchase seed)
   - posted immutability direct runtime SQL
   - double post + reversal race + period close vs post race
   - 100 parallel posts -> 100 unique contiguous numbers
@@ -120,11 +147,14 @@ Server test DB (fresh reset each run): 96/96 PASS
   - v0.6 sales: lifecycle, PDF worker/storage/idempotency, credit notes,
     payment references, RLS/cross-tenant hostile, direct DB immutability,
     100 parallel numbering, double issue, credit race
+  - v0.7 purchases: parsers + XML hostile, lifecycle, SoD, approve/post/
+    correction races, external import idempotency, RLS/cross-tenant,
+    direct DB immutability
   - v0.2 auth 18, v0.3 tenant/RLS 6, v0.4 platform 6 (incl. parallel audit
     chain), unit/security/env/health 25
-Production UI Playwright: 8 PASS / 1 skip + sales flow
+Production UI Playwright: full suite PASS (sales + purchases included)
 npm audit (root/api/web): 0 vulnerabilities
-Production smoke: v0.5 accounting 34/34 PASS + v0.6 sales flow PASS
+Production smoke: v0.5 accounting + v0.6 sales + v0.7 purchase flow PASS
 Backup/restore + SHA-256 verify: PASS
 Production v0.4 backup copy -> migrate -> data preservation: PASS
 ```
@@ -133,7 +163,7 @@ Production v0.4 backup copy -> migrate -> data preservation: PASS
 
 - `/opt/tilivo`, containers `tilivo-*`, ports 127.0.0.1:3100/3101; public
   https://tilivo.mrjaak.com (Let's Encrypt + isolated nginx vhost).
-- Production DB migrated to v0.6 (11 migrations), api/web/worker containers
+- Production DB migrated to v0.7 (12 migrations), api/web/worker containers
   rebuilt,
   worker/db healthy; existing host/container services unchanged.
 - Production test tenant cleanup complete; QA tenants (Tilivo QA Tenant,
@@ -141,4 +171,4 @@ Production v0.4 backup copy -> migrate -> data preservation: PASS
 
 ## Next step
 
-v0.7 Purchases - ei alustata enne eraldi ülesannet.
+v0.8 Banking - ei alustata enne eraldi ülesannet.
