@@ -47,6 +47,8 @@ export const TENANT_PERMISSIONS = [
   'tax.read',
   'tax.manage',
   'tax.report.read',
+  'purchase.classify',
+  'purchase.classification.apply',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -106,6 +108,8 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'tax.read',
       'tax.manage',
       'tax.report.read',
+      'purchase.classify',
+      'purchase.classification.apply',
     ],
   },
   {
@@ -140,6 +144,8 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'registry.read',
       'tax.read',
       'tax.report.read',
+      'purchase.classify',
+      'purchase.classification.apply',
     ],
   },
   {
@@ -152,6 +158,7 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'purchase.read',
       'registry.read',
       'tax.read',
+      'purchase.classify',
     ],
   },
   {
@@ -164,6 +171,7 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'purchase.read',
       'registry.read',
       'tax.read',
+      'purchase.classify',
     ],
   },
 ];

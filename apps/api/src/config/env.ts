@@ -58,6 +58,7 @@ const AppEnvSchema = z.object({
   BUSINESS_REGISTRY_RATE_LIMIT_PER_MINUTE: optionalInt(20, 1, 600),
   RATE_LIMIT_MAX: optionalInt(300, 10, 1_000_000),
   OCR_DRIVER: z.enum(['mock', 'none']).default('mock'),
+  EXPENSE_AI_DRIVER: z.enum(['mock']).default('mock'),
 });
 
 export type AppConfig = z.infer<typeof AppEnvSchema>;

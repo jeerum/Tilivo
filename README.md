@@ -1,7 +1,7 @@
 # Tilivo
 
 Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on
-**v0.10 (Purchases & Receipts) – COMPLETE / GATE PASS**; täpne staatus:
+**v0.11 (AI Expense Classification) – COMPLETE / GATE PASS**; täpne staatus:
 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). Alates **v0.7.5** kehtib uus plaan
 [`ROADMAP.md`](ROADMAP.md): v0.7.5 (Business Registry) on viimane "vana plaani" punkt, seejärel ehitatakse
 täisväärtuslikku Soome raamatupidamistarkvara (Accounting/ERP), mitte enam lihtsalt arvete programmi.

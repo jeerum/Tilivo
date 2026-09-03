@@ -165,8 +165,9 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     const after = await adminDb.query('SELECT count(*)::int AS count FROM pgmigrations');
     // Release migrations after v0.4: accounting core, hardening, tax
     // uniqueness, v0.6 sales core, v0.7 purchases core, v0.7.5 registry,
-    // v0.8 accounting core, v0.9 VAT engine and v0.10 purchases/receipts.
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 10);
+    // v0.8 accounting core, v0.9 VAT engine, v0.10 purchases/receipts and
+    // v0.11 AI classification.
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 11);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(

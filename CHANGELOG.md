@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.11.0] - 2026-09-03
+
+- AI expense classification: provider abstraction with deterministic mock,
+  structured Zod-validated suggestions, tenant-scoped resolution, confidence
+  and concise reasons.
+- Deterministic history signals (supplier -> account/tax/deductibility/
+  payment) feed the classifier; input fingerprint caches unchanged runs.
+- Classification runs table + permissions (`purchase.classify`,
+  `purchase.classification.apply`), audit events, provider failure fallback.
+- Receipt detail AI panel: classify, confidence cards, per-field accept,
+  Apply all, Re-run; purchase documents reuse the same service.
+- Migration `20260908000000_ai_classification_v11` (18 total).
+- Tests: v0.11 unit 5, integration 4, browser E2E 12/12
+  (VAT + Receipts + AI, desktop/tablet/mobile); full API 195/195 PASS.
+
 ## [0.10.0] - 2026-09-03
 
 - Pre-v0.10 recovery commit `ffa99d1` (v0.7.5-v0.9 foundation).

@@ -29,8 +29,14 @@ import {
   updateSupplier,
 } from '../services/purchaseService';
 import { createDocumentOcrProvider } from '../services/ocrService';
+import {
+  applyClassification,
+  classifyPurchaseDocument,
+  createExpenseClassificationProvider,
+  getLatestClassification,
+} from '../services/expenseClassificationService';
 import { resolveSessionUser } from '../services/sessionContext';
-import { requirePermission, resolveTenantAccess } from '../services/tenantService';
+import { requirePermission, resolveTenantAccess, withTenantTransaction } from '../services/tenantService';
 import { writeAuditEvent } from '../services/audit';
 import { registryCompanySchema } from '../services/businessRegistryTypes';
 
@@ -545,6 +551,78 @@ export async function purchaseRoutes(app: FastifyInstance, options: PurchaseRout
     });
     return { purchase };
   });
+
+  app.post<{ Params: { id: string } }>('/api/v1/purchases/:id/classification', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'purchase.classify');
+    const purchaseId = idParam(request.params.id);
+    await writeAuditEvent(db, 'PURCHASE.CLASSIFICATION_REQUESTED', request, {
+      userId,
+      tenantId,
+      objectType: 'purchase_invoice',
+      objectId: purchaseId,
+      metadata: { purchase_document_id: purchaseId },
+    });
+    const provider = createExpenseClassificationProvider(config.EXPENSE_AI_DRIVER);
+    try {
+      const run = await classifyPurchaseDocument(db, tenantId, userId, purchaseId, provider);
+      await writeAuditEvent(db, 'PURCHASE.CLASSIFICATION_COMPLETED', request, {
+        userId,
+        tenantId,
+        objectType: 'purchase_invoice',
+        objectId: purchaseId,
+        metadata: { run_id: String(run.id), provider: provider.name, status: String(run.status) },
+      });
+      return { classification: run };
+    } catch (error) {
+      await writeAuditEvent(db, 'PURCHASE.CLASSIFICATION_FAILED', request, {
+        userId,
+        tenantId,
+        objectType: 'purchase_invoice',
+        objectId: purchaseId,
+        metadata: { message: error instanceof Error ? error.message.slice(0, 300) : 'classification failed' },
+      }).catch(() => undefined);
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/purchases/:id/classification', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'purchase.read');
+    const purchaseId = idParam(request.params.id);
+    const run = await withTenantTransaction(db, tenantId, (client) =>
+      getLatestClassification(client, tenantId, purchaseId),
+    );
+    return { classification: run ?? null };
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/purchases/:id/classification/apply',
+    async (request) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'purchase.classification.apply');
+      const purchaseId = idParam(request.params.id);
+      const body = request.body ?? {};
+      const result = await applyClassification(db, tenantId, userId, purchaseId, {
+        expenseAccountId: typeof body.expense_account_id === 'string' ? body.expense_account_id : undefined,
+        taxCodeId: typeof body.tax_code_id === 'string' ? body.tax_code_id : undefined,
+        deductibilityPercent:
+          typeof body.deductibility_percent === 'string' ? body.deductibility_percent : undefined,
+        paymentMethod: typeof body.payment_method === 'string' ? body.payment_method : undefined,
+        costCenter: typeof body.cost_center === 'string' ? body.cost_center : undefined,
+        description: typeof body.description === 'string' ? body.description : undefined,
+        category: typeof body.category === 'string' ? body.category : undefined,
+      });
+      await writeAuditEvent(db, 'PURCHASE.CLASSIFICATION_APPLIED', request, {
+        userId,
+        tenantId,
+        objectType: 'purchase_invoice',
+        objectId: purchaseId,
+        metadata: { purchase_document_id: purchaseId, fields: Object.keys(body) },
+      });
+      return { applied: result.applied };
+    },
+  );
 
   // Documents ----------------------------------------------------------------
   app.post<{ Params: { id: string } }>('/api/v1/purchases/:id/documents', async (request, reply) => {

@@ -2,7 +2,16 @@
 
 ## Current version
 
-**v0.10 (Purchases & Receipts) - COMPLETE / GATE PASS**
+**v0.11 (AI Expense Classification) - COMPLETE / GATE PASS**
+
+Gate validated:
+- migration `20260908000000_ai_classification_v11` (18 total);
+- API tests 195/195 PASS, 0 skipped (v0.11 unit 5 + integration 4 plus full
+  regression v0.5-v0.10);
+- web unit tests 16/16 PASS; lint/typecheck/build PASS;
+- Playwright VAT + Receipts + AI 12/12 PASS (desktop/tablet/mobile).
+
+Previous v0.10 gate:
 
 Gate validated:
 - migrations `20260907000000_purchases_receipts_v10` and
@@ -64,6 +73,7 @@ Security review: v0.2 CRITICAL/HIGH 0 open
 - v0.8 Accounting Core 1 (see below).
 - v0.9 VAT / ALV Engine (see below).
 - v0.10 Purchases & Receipts (see below).
+- v0.11 AI Expense Classification (see below).
 
 ## v0.5 Accounting Core
 
@@ -320,6 +330,19 @@ ehitatakse täisväärtuslikku Soome raamatupidamistarkvara.
   all through Accounting Core + VAT engine; posted documents immutable.
 - Unit 9, integration 6, web 16, Playwright VAT+Receipts 9/9
   (desktop/tablet/mobile); full API regression 186/186 PASS, 0 skipped.
+
+## v0.11 AI Expense Classification
+
+- Provider abstraction (`ExpenseClassificationProvider`), deterministic mock
+  active provider, Zod-validated structured output, tenant ID resolution.
+- Inputs: OCR extractions, document metadata, active accounts, effective tax
+  codes, supplier history signals.
+- Classification runs table, input fingerprint caching, audit events,
+  permissions `purchase.classify` / `purchase.classification.apply`.
+- Receipt AI panel with confidence + per-field accept/apply-all/re-run;
+  failure fallback keeps manual workflow usable.
+- Unit 5, integration 4, web 16, Playwright VAT+Receipts+AI 12/12;
+  full API regression 195/195 PASS, 0 skipped.
 
 ## Tests
 

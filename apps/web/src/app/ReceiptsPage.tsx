@@ -3,6 +3,7 @@ import { api } from '../auth/api';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
 import type { TaxCodeView } from '../lib/tax';
+import { AiSuggestionPanel } from './AiSuggestionPanel';
 
 const moneyText = (value: string | number): string => Number(value ?? 0).toFixed(2);
 
@@ -289,6 +290,7 @@ export function ReceiptsPage({ tenantId, headers }: { tenantId: string; headers?
           <p>{active.document_type} · {active.payment_method} · {statusLabel(active.status)} · {active.ocr_status}</p>
           {active.duplicate_warning && <p className="error-text">{active.duplicate_warning}</p>}
           <p>{t('subtotal')}: {moneyText(active.subtotal)} · {t('taxTotal')}: {moneyText(active.tax_total)} · {t('total')}: <strong>{moneyText(active.total)}</strong></p>
+          <AiSuggestionPanel documentId={active.id} tenantId={tenantId} onChanged={() => void loadAll()} />
           {active.accounting_journal_entry_id && <p className="muted">{t('journalLink')}: {active.accounting_journal_entry_id}</p>}
         </div>
       )}
