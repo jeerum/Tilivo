@@ -52,6 +52,8 @@ export const TENANT_PERMISSIONS = [
   'sales.payment.record',
   'sales.reminder.create',
   'sales.recurring.manage',
+  'sales.invoice.send',
+  'sales.einvoice.export',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -116,6 +118,8 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'sales.payment.record',
       'sales.reminder.create',
       'sales.recurring.manage',
+      'sales.invoice.send',
+      'sales.einvoice.export',
     ],
   },
   {
@@ -155,6 +159,8 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'sales.payment.record',
       'sales.reminder.create',
       'sales.recurring.manage',
+      'sales.invoice.send',
+      'sales.einvoice.export',
     ],
   },
   {

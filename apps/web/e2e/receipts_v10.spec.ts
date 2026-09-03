@@ -40,9 +40,8 @@ async function jsonApi(
 async function tenantId(page: Page): Promise<string> {
   await page.goto('/');
   const tenants = await jsonApi(page, '', 'GET', '/api/v1/tenants');
-  const tenant = tenants.payload?.tenants?.[0];
-  if (!tenant?.id) throw new Error('No tenant found');
-  return String(tenant.id);
+  const tenant = tenants.payload?.tenants?.find((entry: any) => String(entry.name).includes('Receipts QA Tenant'));
+  return String(tenant?.id ?? tenants.payload?.tenants?.[0]?.id);
 }
 
 async function seed(page: Page, tenant: string, year: number): Promise<{

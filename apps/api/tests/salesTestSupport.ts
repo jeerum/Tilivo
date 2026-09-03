@@ -231,7 +231,20 @@ export class SalesFixture {
 
   async configureSales(
     auth: SalesAuth,
-    options: { arAccountId: string; revenueAccountId: string; taxPayableAccountId: string; referenceType?: string },
+    options: {
+      arAccountId: string;
+      revenueAccountId: string;
+      taxPayableAccountId: string;
+      referenceType?: string;
+      advanceAccountId?: string;
+      bankIban?: string;
+      bankBic?: string;
+      bankHolder?: string;
+      lateInterestEnabled?: boolean;
+      lateInterestRate?: string;
+      reminderFeeEnabled?: boolean;
+      reminderFeeAmount?: string;
+    },
   ): Promise<{ seriesId: string; settings: any }> {
     const current = await this.request({
       method: 'GET',
@@ -251,6 +264,14 @@ export class SalesFixture {
         tax_payable_account_id: options.taxPayableAccountId,
         default_currency: 'EUR',
         payment_reference_type: options.referenceType ?? 'FI_DOMESTIC',
+        advance_payments_received_account_id: options.advanceAccountId ?? null,
+        bank_iban: options.bankIban ?? null,
+        bank_bic: options.bankBic ?? null,
+        bank_account_holder: options.bankHolder ?? null,
+        late_interest_enabled: options.lateInterestEnabled ?? false,
+        late_interest_rate: options.lateInterestRate ?? '0',
+        reminder_fee_enabled: options.reminderFeeEnabled ?? false,
+        reminder_fee_amount: options.reminderFeeAmount ?? '0',
       },
       cookie: auth.cookie,
       csrf: auth.csrf,
@@ -261,7 +282,11 @@ export class SalesFixture {
     return { seriesId, settings: patched.body.settings };
   }
 
-  async createCustomer(auth: SalesAuth, name = 'Acme Customer Oy'): Promise<string> {
+  async createCustomer(
+    auth: SalesAuth,
+    name = 'Acme Customer Oy',
+    overrides: Record<string, unknown> = {},
+  ): Promise<string> {
     const result = await this.request({
       method: 'POST',
       url: '/api/v1/customers',
@@ -276,6 +301,7 @@ export class SalesFixture {
         payment_terms_days: 14,
         city: 'Helsinki',
         address_line1: 'Testikatu 1',
+        ...overrides,
       },
       cookie: auth.cookie,
       csrf: auth.csrf,
@@ -290,7 +316,7 @@ export class SalesFixture {
     auth: SalesAuth,
     customerId: string,
     lines: Array<{ description: string; quantity: string; unit_price: string; discount_percent?: string; tax_code_id: string }>,
-    options: { issue_date?: string } = {},
+    options: { issue_date?: string; document_type?: string; discount_percent?: string; due_date?: string } = {},
   ): Promise<any> {
     const result = await this.request({
       method: 'POST',
@@ -298,6 +324,9 @@ export class SalesFixture {
       body: {
         customer_id: customerId,
         issue_date: options.issue_date ?? '2026-09-10',
+        due_date: options.due_date,
+        document_type: options.document_type,
+        discount_percent: options.discount_percent,
         lines: lines.map((line) => ({
           description: line.description,
           quantity: line.quantity,

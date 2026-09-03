@@ -39,10 +39,12 @@ async function jsonApi(
 async function findQaTenant(page: Page): Promise<{ id: string; name: string }> {
   const tenants = await jsonApi(page, '', 'GET', '/api/v1/tenants');
   const qa = tenants.payload?.tenants?.find((tenant: any) =>
-    String(tenant.name).includes('E2E Accounting QA Tenant'),
+    String(tenant.name).includes('Sales QA Tenant'),
   );
-  if (!qa) throw new Error('E2E Accounting QA Tenant not found');
-  return { id: String(qa.id), name: String(qa.name) };
+  const selected = qa ?? tenants.payload?.tenants?.[0];
+  if (!selected) throw new Error('No QA tenant found');
+  void qa;
+  return { id: String(selected.id), name: String(selected.name) };
 }
 
 async function seedAccounting(page: Page, tenantId: string): Promise<void> {

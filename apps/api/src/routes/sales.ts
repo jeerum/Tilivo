@@ -5,27 +5,47 @@ import type { Db } from '../db/pool';
 import { AppError, ErrorCodes } from '../lib/errors';
 import {
   cancelInvoiceDraft,
+  appendSendHistory,
+  createCreditNote,
   createCustomer,
   createInvoiceDraft,
+  createRecurringTemplate,
   createSeries,
   creditInvoice,
+  customerBalance,
+  customerStatement,
+  deleteRecurringTemplate,
+  exportEInvoicePayload,
+  getCreditableSummary,
   getCustomer,
   getInvoice,
   getInvoicePdfMetadata,
+  getReminderPdfMetadata,
+  getRecurringTemplate,
+  getSalesReminder,
+  getInvoiceAdvanceState,
   getSalesSettings,
   issueInvoice,
+  listCreditNotes,
+  listRecurringTemplates,
   listCustomers,
+  listSalesReminders,
+  listSalesPayments,
+  listSendHistory,
   listInvoices,
   listSeries,
+  markReminderSendResult,
+  requestReminderPdf,
+  salesAging,
   salesLedger,
   recordSalesPayment,
   createSalesReminder,
-  listSalesReminders,
-  createRecurringTemplate,
-  listRecurringTemplates,
   generateDueRecurringInvoices,
   retryInvoicePdf,
+  setInvoiceDeliveryState,
   setCustomerActive,
+  setRecurringTemplateActive,
+  updateRecurringTemplate,
   updateCustomer,
   updateInvoiceDraft,
   updateSalesSettings,
@@ -37,6 +57,7 @@ import { writeAuditEvent } from '../services/audit';
 import { getDocumentDownload } from '../services/documentStorage';
 import type { LocalObjectStorageProvider } from '../services/documentStorage';
 import { registryCompanySchema } from '../services/businessRegistryTypes';
+import type { EmailProvider } from '../services/emailProvider';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -73,6 +94,12 @@ const customerSchema = z.object({
   iban: nullableText(64),
   e_invoice_address: nullableText(300),
   e_invoice_operator: nullableText(300),
+  e_invoice_ovt: nullableText(64),
+  delivery_method: z.enum(['EMAIL', 'E_INVOICE', 'PDF_MANUAL', 'OTHER']).optional(),
+  reminder_fee_amount: nullableText(28),
+  late_interest_enabled: z.boolean().optional(),
+  late_interest_rate: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid decimal').optional(),
+  late_interest_grace_days: z.number().int().min(0).max(3650).optional(),
   ...registryFields,
 });
 
@@ -94,6 +121,12 @@ const invoiceDraftSchema = z.object({
   currency_code: z.string().trim().length(3).optional(),
   language: z.string().trim().length(2).optional(),
   reference_type: z.enum(['FI_DOMESTIC', 'RF', 'NONE']).optional(),
+  document_type: z.enum(['SALES_INVOICE', 'ADVANCE_INVOICE']).optional(),
+  discount_percent: decimalString.optional(),
+  discount_amount: decimalString.optional(),
+  delivery_method: z.enum(['EMAIL', 'E_INVOICE', 'PDF_MANUAL', 'OTHER']).optional(),
+  customer_po_number: nullableText(100),
+  customer_reference: nullableText(200),
   lines: z.array(invoiceLineSchema).min(1).max(200),
 });
 
@@ -113,12 +146,23 @@ const settingsSchema = z.object({
   default_language: z.string().trim().length(2).optional(),
   default_currency: z.string().trim().length(3).optional(),
   payment_reference_type: z.enum(['FI_DOMESTIC', 'RF', 'NONE']).optional(),
+  bank_iban: nullableText(64),
+  bank_bic: nullableText(32),
+  bank_account_holder: nullableText(200),
+  advance_payments_received_account_id: uuidString.nullable().optional(),
+  default_delivery_method: z.enum(['EMAIL', 'E_INVOICE', 'PDF_MANUAL', 'OTHER']).optional(),
+  reminder_fee_enabled: z.boolean().optional(),
+  reminder_fee_amount: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid decimal').optional(),
+  late_interest_enabled: z.boolean().optional(),
+  late_interest_rate: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid decimal').optional(),
+  late_interest_grace_days: z.number().int().min(0).max(3650).optional(),
 });
 
 interface SalesRouteOptions {
   db: Db;
   config: AppConfig;
   storage: LocalObjectStorageProvider;
+  emailProvider: EmailProvider;
 }
 
 async function context(request: FastifyRequest, db: Db, config: AppConfig) {
@@ -411,11 +455,20 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
     },
   );
 
-  app.post<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/issue', async (request) => {
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/sales/invoices/:id/issue',
+    async (request) => {
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'invoice.issue');
     const invoiceId = uuidParam(request.params.id);
-    const result = await issueInvoice(db, tenantId, invoiceId, userId);
+    const body = request.body ?? {};
+    const advanceAllocations = Array.isArray(body.advance_allocations)
+      ? (body.advance_allocations as Array<{ advance_invoice_id: string; amount: string }>).map((item) => ({
+          advanceInvoiceId: String(item.advance_invoice_id),
+          amount: String(item.amount),
+        }))
+      : undefined;
+    const result = await issueInvoice(db, tenantId, invoiceId, userId, { advanceAllocations });
     const issued = result.invoice;
     await writeAuditEvent(db, 'SALES_INVOICE.ISSUED', request, {
       userId,
@@ -433,10 +486,38 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
         tax_total: String(issued.tax_total),
         total: String(issued.total),
         journal_entry_id: String(issued.accounting_journal_entry_id),
+        document_type: String(issued.document_type ?? 'SALES_INVOICE'),
+        advance_applied: String(issued.advance_applied ?? '0'),
       },
     });
+    if (String(issued.document_type ?? '') === 'ADVANCE_INVOICE') {
+      await writeAuditEvent(db, 'SALES_ADVANCE.ISSUED', request, {
+        userId,
+        tenantId,
+        objectType: 'sales_invoice',
+        objectId: invoiceId,
+        metadata: { invoice_id: invoiceId, invoice_number: String(issued.invoice_number) },
+      });
+    }
+    if (advanceAllocations && advanceAllocations.length > 0) {
+      await writeAuditEvent(db, 'SALES_ADVANCE.APPLIED', request, {
+        userId,
+        tenantId,
+        objectType: 'sales_invoice',
+        objectId: invoiceId,
+        metadata: {
+          invoice_id: invoiceId,
+          invoice_number: String(issued.invoice_number),
+          advance_allocations: advanceAllocations.map((item) => ({
+            advance_invoice_id: item.advanceInvoiceId,
+            amount: item.amount,
+          })),
+        },
+      });
+    }
     return { invoice: issued, journal_entry_id: result.entryId };
-  });
+    },
+  );
 
   app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
     '/api/v1/sales/invoices/:id/credit',
@@ -568,6 +649,7 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
     const result = await createSalesReminder(db, tenantId, invoiceId, userId, {
       note: typeof body.note === 'string' ? body.note : undefined,
       level: typeof body.level === 'number' ? body.level : undefined,
+      applyReminderFee: typeof body.apply_reminder_fee === 'boolean' ? body.apply_reminder_fee : false,
     });
     await writeAuditEvent(db, 'SALES_REMINDER.CREATED', request, {
       userId,
@@ -584,6 +666,20 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
     await requirePermission(db, userId, tenantId, 'sales.read');
     const reminders = await listSalesReminders(db, tenantId, uuidParam(request.params.id));
     return { reminders };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/payments', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const payments = await listSalesPayments(db, tenantId, uuidParam(request.params.id));
+    return { payments };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/advances', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const state = await getInvoiceAdvanceState(db, tenantId, uuidParam(request.params.id));
+    return { advance_state: state };
   });
 
   app.get('/api/v1/sales/recurring-templates', async (request) => {
@@ -628,5 +724,353 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
       metadata: { count: generated.length },
     });
     return { generated };
+  });
+
+  // --- credit notes (full + partial) -------------------------------------
+  app.get<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/creditable', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    return { creditable: await getCreditableSummary(db, tenantId, uuidParam(request.params.id)) };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/credit-notes', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const notes = await listCreditNotes(db, tenantId, uuidParam(request.params.id));
+    return { credit_notes: notes };
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/sales/invoices/:id/credit-note',
+    async (request, reply) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'invoice.credit');
+      const originalId = uuidParam(request.params.id);
+      const body = request.body ?? {};
+      const reason = typeof body.reason === 'string' ? body.reason : '';
+      const lines = Array.isArray(body.lines)
+        ? (body.lines as Array<{ sales_invoice_line_id: string; quantity?: string; unit_price?: string }>)
+        : undefined;
+      const result = await createCreditNote(db, tenantId, originalId, userId, { reason, lines });
+      const creditRow = result.credit_invoice;
+      await writeAuditEvent(db, 'SALES_INVOICE.CREDIT_CREATED', request, {
+        userId,
+        tenantId,
+        objectType: 'sales_invoice',
+        objectId: String(creditRow.id),
+        metadata: { original_invoice_id: originalId, credit_invoice_id: String(creditRow.id) },
+      });
+      await writeAuditEvent(db, 'SALES_INVOICE.CREDIT_ISSUED', request, {
+        userId,
+        tenantId,
+        objectType: 'sales_invoice',
+        objectId: String(creditRow.id),
+        metadata: {
+          original_invoice_id: originalId,
+          credit_invoice_id: String(creditRow.id),
+          credit_invoice_number: String(creditRow.invoice_number),
+          journal_entry_id: String(creditRow.accounting_journal_entry_id),
+        },
+      });
+      if (result.partial) {
+        await writeAuditEvent(db, 'SALES_INVOICE.PARTIALLY_CREDITED', request, {
+          userId,
+          tenantId,
+          objectType: 'sales_invoice',
+          objectId: originalId,
+          metadata: { original_invoice_id: originalId, credit_invoice_id: String(creditRow.id) },
+        });
+      }
+      return reply.code(201).send(result);
+    },
+  );
+
+  // --- AR aging / statements / balances ------------------------------------
+  app.get('/api/v1/sales/aging', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const query = request.query as Record<string, unknown>;
+    return salesAging(db, tenantId, {
+      asOf: typeof query.as_of === 'string' ? query.as_of : undefined,
+      customerId: typeof query.customer_id === 'string' ? query.customer_id : undefined,
+    });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/customers/:id/statement', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const query = request.query as Record<string, unknown>;
+    const statement = await customerStatement(db, tenantId, uuidParam(request.params.id), {
+      from: typeof query.from === 'string' ? query.from : undefined,
+      to: typeof query.to === 'string' ? query.to : undefined,
+    });
+    return { statement };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/customers/:id/balance', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const balance = await customerBalance(db, tenantId, uuidParam(request.params.id));
+    return { balance };
+  });
+
+  // --- delivery --------------------------------------------------------------
+  app.get('/api/v1/sales/send-history', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const query = request.query as Record<string, unknown>;
+    const history = await listSendHistory(db, tenantId, {
+      documentType: typeof query.document_type === 'string' ? query.document_type : undefined,
+      documentId: typeof query.document_id === 'string' ? query.document_id : undefined,
+    });
+    return { history };
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/sales/invoices/:id/send',
+    async (request) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'sales.invoice.send');
+      const invoiceId = uuidParam(request.params.id);
+      const body = request.body ?? {};
+      const recipient = typeof body.recipient === 'string' && body.recipient
+        ? String(body.recipient)
+        : undefined;
+      const message = typeof body.message === 'string' ? String(body.message) : undefined;
+      const invoice = await getInvoice(db, tenantId, invoiceId);
+      if (!['ISSUED', 'PARTIALLY_PAID', 'CREDITED'].includes(String(invoice.status))) {
+        throw new AppError(ErrorCodes.invoiceNotDraft, 'Only issued invoices can be sent', 409);
+      }
+      const pdfMeta = await getInvoicePdfMetadata(db, tenantId, invoiceId);
+      const download = await getDocumentDownload(db, tenantId, String(pdfMeta.document_id));
+      const data = await storage.get(download.storageKey);
+      const to = recipient ?? String((invoice.customer_snapshot as any)?.email ?? '');
+      const number = String(invoice.invoice_number ?? invoiceId);
+      const subject = `Invoice ${number}`;
+      const text = message ?? `Please find attached invoice ${number}.`;
+      try {
+        await options.emailProvider.send({
+          to,
+          subject,
+          text,
+          attachments: [{ filename: `invoice-${number}.pdf`, contentType: 'application/pdf', content: data }],
+        });
+        await appendSendHistory(db, tenantId, userId, {
+          documentType: 'SALES_INVOICE',
+          documentId: invoiceId,
+          channel: 'EMAIL',
+          recipient: to,
+          subject,
+          provider: options.emailProvider.kind,
+          status: 'SENT',
+        });
+        await setInvoiceDeliveryState(db, tenantId, invoiceId, 'SENT');
+        await writeAuditEvent(db, 'SALES_INVOICE.SENT', request, {
+          userId,
+          tenantId,
+          objectType: 'sales_invoice',
+          objectId: invoiceId,
+          metadata: { invoice_id: invoiceId, recipient: to, channel: 'EMAIL' },
+        });
+        return { sent: true, status: 'SENT', recipient: to };
+      } catch (cause) {
+        const errorMessage = cause instanceof Error ? cause.message.slice(0, 400) : 'Email provider failure';
+        await appendSendHistory(db, tenantId, userId, {
+          documentType: 'SALES_INVOICE',
+          documentId: invoiceId,
+          channel: 'EMAIL',
+          recipient: to,
+          subject,
+          provider: options.emailProvider.kind,
+          status: 'FAILED',
+          error: errorMessage,
+        });
+        await setInvoiceDeliveryState(db, tenantId, invoiceId, 'FAILED');
+        return { sent: false, status: 'FAILED', error: errorMessage };
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>('/api/v1/sales/invoices/:id/e-invoice/export', async (request, reply) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.einvoice.export');
+    const invoiceId = uuidParam(request.params.id);
+    const result = await exportEInvoicePayload(db, tenantId, invoiceId, userId);
+    await writeAuditEvent(db, 'SALES_INVOICE.EINVOICE_EXPORTED', request, {
+      userId,
+      tenantId,
+      objectType: 'sales_invoice',
+      objectId: invoiceId,
+      metadata: { invoice_id: invoiceId },
+    });
+    return reply.send(result);
+  });
+
+  // --- reminders: detail, PDF and send --------------------------------------
+  app.get<{ Params: { id: string } }>('/api/v1/sales/reminders/:id', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    return { reminder: await getSalesReminder(db, tenantId, uuidParam(request.params.id)) };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/v1/sales/reminders/:id/pdf', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const reminderId = uuidParam(request.params.id);
+    const reminder = await requestReminderPdf(db, tenantId, reminderId);
+    await writeAuditEvent(db, 'SALES_REMINDER.PDF_REQUESTED', request, {
+      userId,
+      tenantId,
+      objectType: 'sales_reminder',
+      objectId: reminderId,
+      metadata: { reminder_id: reminderId },
+    });
+    return { reminder };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/v1/sales/reminders/:id/pdf', async (request, reply) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const reminderId = uuidParam(request.params.id);
+    const pdf = await getReminderPdfMetadata(db, tenantId, reminderId);
+    const download = await getDocumentDownload(db, tenantId, String(pdf.pdf_document_id));
+    const data = await storage.get(download.storageKey);
+    const safeName = String(pdf.reminder_number ?? reminderId).replace(/[^A-Za-z0-9._-]/g, '_');
+    reply.header('content-type', 'application/pdf');
+    reply.header('content-length', String(data.length));
+    reply.header('content-disposition', `attachment; filename="${safeName}.pdf"`);
+    reply.header('cache-control', 'private, no-store');
+    return reply.send(data);
+  });
+
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/sales/reminders/:id/send',
+    async (request) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'sales.invoice.send');
+      const reminderId = uuidParam(request.params.id);
+      const body = request.body ?? {};
+      const reminder = await getSalesReminder(db, tenantId, reminderId);
+      const invoiceId = String(reminder.invoice_id);
+      const invoice = await getInvoice(db, tenantId, invoiceId);
+      if (reminder.pdf_status !== 'READY' || !reminder.pdf_document_id) {
+        throw new AppError(ErrorCodes.pdfNotReady, 'Generate the reminder PDF before sending', 409);
+      }
+      const download = await getDocumentDownload(db, tenantId, String(reminder.pdf_document_id));
+      const data = await storage.get(download.storageKey);
+      const to = typeof body.recipient === 'string' && body.recipient
+        ? String(body.recipient)
+        : String(reminder.recipient ?? (invoice.customer_snapshot as any)?.email ?? '');
+      const subject = typeof body.subject === 'string' && body.subject
+        ? String(body.subject)
+        : `Reminder ${String(reminder.reminder_number ?? reminderId)}`;
+      const text = typeof body.message === 'string' && body.message
+        ? String(body.message)
+        : `Invoice ${String(invoice.invoice_number ?? invoiceId)} is overdue.`;
+      try {
+        await options.emailProvider.send({
+          to,
+          subject,
+          text,
+          attachments: [{
+            filename: `${String(reminder.reminder_number ?? 'reminder')}.pdf`,
+            contentType: 'application/pdf',
+            content: data,
+          }],
+        });
+        await markReminderSendResult(db, tenantId, reminderId, { status: 'SENT', sentVia: 'email' });
+        await appendSendHistory(db, tenantId, userId, {
+          documentType: 'SALES_REMINDER',
+          documentId: reminderId,
+          channel: 'EMAIL',
+          recipient: to,
+          subject,
+          provider: options.emailProvider.kind,
+          status: 'SENT',
+        });
+        await writeAuditEvent(db, 'SALES_REMINDER.SENT', request, {
+          userId,
+          tenantId,
+          objectType: 'sales_reminder',
+          objectId: reminderId,
+          metadata: { reminder_id: reminderId, recipient: to },
+        });
+        return { sent: true, status: 'SENT', recipient: to };
+      } catch (cause) {
+        const errorMessage = cause instanceof Error ? cause.message.slice(0, 400) : 'Email provider failure';
+        await markReminderSendResult(db, tenantId, reminderId, {
+          status: 'FAILED',
+          sentVia: 'email',
+          error: errorMessage,
+        });
+        await appendSendHistory(db, tenantId, userId, {
+          documentType: 'SALES_REMINDER',
+          documentId: reminderId,
+          channel: 'EMAIL',
+          recipient: to,
+          subject,
+          provider: options.emailProvider.kind,
+          status: 'FAILED',
+          error: errorMessage,
+        });
+        return { sent: false, status: 'FAILED', error: errorMessage };
+      }
+    },
+  );
+
+  // --- recurring templates management ---------------------------------------
+  app.get<{ Params: { id: string } }>('/api/v1/sales/recurring-templates/:id', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.read');
+    const template = await getRecurringTemplate(db, tenantId, uuidParam(request.params.id));
+    return { template };
+  });
+
+  app.patch<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/sales/recurring-templates/:id',
+    async (request) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'sales.recurring.manage');
+      const templateId = uuidParam(request.params.id);
+      const body = request.body ?? {};
+      const template = await updateRecurringTemplate(db, tenantId, templateId, userId, {
+        name: typeof body.name === 'string' ? body.name : undefined,
+        frequency: typeof body.frequency === 'string' ? body.frequency : undefined,
+        endDate: body.end_date === null ? null : typeof body.end_date === 'string' ? body.end_date : undefined,
+        language: typeof body.language === 'string' ? body.language : undefined,
+        paymentTermsDays: typeof body.payment_terms_days === 'number' ? body.payment_terms_days : undefined,
+        lines: Array.isArray(body.lines) ? (body.lines as any[]) : undefined,
+      });
+      await writeAuditEvent(db, 'RECURRING_TEMPLATE.UPDATED', request, {
+        userId,
+        tenantId,
+        objectType: 'recurring_template',
+        objectId: templateId,
+        metadata: { template_id: templateId },
+      });
+      return { template };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>('/api/v1/sales/recurring-templates/:id/disable', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.recurring.manage');
+    const template = await setRecurringTemplateActive(db, tenantId, uuidParam(request.params.id), false);
+    return { template };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/v1/sales/recurring-templates/:id/activate', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.recurring.manage');
+    const template = await setRecurringTemplateActive(db, tenantId, uuidParam(request.params.id), true);
+    return { template };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/v1/sales/recurring-templates/:id', async (request, reply) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'sales.recurring.manage');
+    const templateId = uuidParam(request.params.id);
+    await deleteRecurringTemplate(db, tenantId, templateId);
+    return reply.code(204).send();
   });
 }

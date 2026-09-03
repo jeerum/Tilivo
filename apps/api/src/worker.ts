@@ -2,7 +2,7 @@ import { loadConfig } from './config/env';
 import { createPool } from './db/pool';
 import { processOutbox } from './services/integrationQueue';
 import { LocalObjectStorageProvider } from './services/documentStorage';
-import { processPdfRequest } from './services/invoicePdfWorker';
+import { processPdfRequest, processReminderPdfRequest } from './services/invoicePdfWorker';
 
 async function runOnce(pool: ReturnType<typeof createPool>): Promise<void> {
   const config = loadConfig();
@@ -10,6 +10,8 @@ async function runOnce(pool: ReturnType<typeof createPool>): Promise<void> {
   const processed = await processOutbox(pool, async (event) => {
     if (event.event_type === 'SALES_INVOICE_PDF_REQUESTED') {
       await processPdfRequest(pool, storage, event);
+    } else if (event.event_type === 'SALES_REMINDER_PDF_REQUESTED') {
+      await processReminderPdfRequest(pool, storage, event);
     } else {
       console.log(
         JSON.stringify({

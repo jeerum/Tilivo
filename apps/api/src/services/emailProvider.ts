@@ -4,6 +4,7 @@ export interface EmailMessage {
   to: string;
   subject: string;
   text: string;
+  attachments?: Array<{ filename: string; contentType: string; content: Buffer }>;
 }
 
 export interface EmailProvider {
@@ -42,10 +43,50 @@ export class DevelopmentEmailProvider implements EmailProvider {
       throw new Error('DevelopmentEmailProvider is disabled');
     }
     await this.db.query(
-      `INSERT INTO dev_email_outbox (recipient_email, subject, body)
-       VALUES ($1, $2, $3)`,
-      [message.to, message.subject, message.text],
+      `INSERT INTO dev_email_outbox
+         (recipient_email, subject, body, attachment_name, attachment_content_type, attachment_base64)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        message.to,
+        message.subject,
+        message.text,
+        message.attachments?.[0]?.filename ?? null,
+        message.attachments?.[0]?.contentType ?? null,
+        message.attachments?.[0] ? message.attachments[0].content.toString('base64') : null,
+      ],
     );
+  }
+}
+
+/**
+ * Deterministic provider used by tests and local QA. It records every message
+ * (recipient/subject/body/attachments) in process memory and can simulate a
+ * provider failure on the next send.
+ */
+export class MockEmailProvider implements EmailProvider {
+  readonly kind = 'mock';
+  private failNextSend = false;
+  readonly sent: EmailMessage[] = [];
+
+  failNext(): void {
+    this.failNextSend = true;
+  }
+
+  async send(message: EmailMessage): Promise<void> {
+    if (this.failNextSend) {
+      this.failNextSend = false;
+      throw new Error('Mock email provider failure');
+    }
+    this.sent.push({
+      to: message.to,
+      subject: message.subject,
+      text: message.text,
+      attachments: message.attachments?.map((attachment) => ({
+        filename: attachment.filename,
+        contentType: attachment.contentType,
+        content: Buffer.from(attachment.content),
+      })),
+    });
   }
 }
 

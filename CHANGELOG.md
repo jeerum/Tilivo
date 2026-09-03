@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.12.1] - 2026-09-03 (completion work, uncommitted until gate)
+
+- v0.12 FEATURE GATE: v0.12 browser E2E suite green on desktop/tablet/mobile
+  (15/15, 0 skipped) covering payments, partial credit, advance allocation,
+  reminder create/send, AR aging, customer statement, recurring generation,
+  invoice e-mail send, e-invoice export/readiness and FI/EN/ET PDF download.
+  Customer delivery/e-invoice defaults editor and issued-invoice advance state
+  are surfaced in the UI. Final commit for v0.12 Sales Ledger 2.0.
+
+- Browser UI: Sales navigation extended with Recurring, AR Aging, Customer
+  Statement and Reminders/Overdue views; invoice list shows payment/delivery
+  status; invoice detail exposes payment, partial/full credit, reminder,
+  delivery and e-invoice panels; advance invoices and advance allocation on
+  final invoices; recurring template editor/generate; AR summary cards.
+  New Sales UI helpers covered by web unit tests; Playwright spec
+  `sales_v12_ui.spec.ts` passes desktop/tablet/mobile locally.
+- Partial credit notes: multiple credits per invoice, line-level quantity/price
+  caps, over-credit rejection, fully-credited status transition and audit.
+- Advance invoices: liability-based issuance (Dr AR / Cr advances received),
+  advance allocations on final invoices with one-time revenue recognition,
+  remaining-balance validation and SALES_ADVANCE audit events.
+- Invoice-level discounts (percent or fixed) allocated deterministically
+  before VAT through the existing engine; frozen on issued invoices.
+- FI/EN/ET PDF labels, distinct document-type titles, bank details, discounts,
+  advances/credits, amount-due and reminder PDFs (cp1252-safe text).
+- Reminders: fee/interest policy snapshots, PDF generation worker, e-mail send
+  with attachment, send history and failure-safe status transitions.
+- AR aging (6 buckets), customer statement, customer balance summary and
+  expanded ledger summary cards (outstanding/overdue/due soon/paid).
+- Delivery methods, e-invoice readiness export, send history and recurring
+  template update/disable/delete API.
+- New permissions `sales.invoice.send` and `sales.einvoice.export`.
+- Migration `20260910000000_sales_ledger_v12_complete` (21 total).
+- Tests: sales math unit 12, PDF labels 6, email provider 3, completion
+  integration 7; full API regression 223/223 PASS on a fresh test DB.
+- Finnish prepayment VAT and statutory interest sources checked 2026-09-03:
+  vero.fi press release 30.5.2024 (VAT chargeable when advance payment is
+  received) and Bank of Finland 29.6.2026 (H2 2026 reference 2.5 %,
+  commercial penalty rate 10.5 % pa, Interest Act 4 a §).
+
 ## [0.12.0] - 2026-09-03
 
 - Sales Ledger 2.0: document types (invoice/credit/advance/recurring),

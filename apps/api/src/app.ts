@@ -203,7 +203,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     storage,
   });
   await app.register(accountingRoutes, { db, config });
-  await app.register(salesRoutes, { db, config, storage });
+  await app.register(salesRoutes, { db, config, storage, emailProvider });
   await app.register(purchaseRoutes, { db, config, storage });
   await app.register(businessRegistryRoutes, {
     db,

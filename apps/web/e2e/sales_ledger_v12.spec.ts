@@ -27,7 +27,8 @@ async function jsonApi(page: Page, tenant: string, method: 'GET' | 'POST', url: 
 async function tenantId(page: Page): Promise<string> {
   await page.goto('/');
   const result = await jsonApi(page, '', 'GET', '/api/v1/tenants');
-  return String(result.payload.tenants[0].id);
+  const tenant = result.payload?.tenants?.find((entry: any) => String(entry.name).includes('Sales QA Tenant'));
+  return String(tenant?.id ?? result.payload?.tenants?.[0]?.id);
 }
 
 async function seed(page: Page, tenant: string, year: number): Promise<{ invoiceId: string; customerName: string; templateId: string }> {

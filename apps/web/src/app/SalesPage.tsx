@@ -16,8 +16,22 @@ import {
   taxRateLabel,
   type TaxCodeView,
 } from '../lib/tax';
+import {
+  AdvanceAllocationPanel,
+  AdvanceStateSection,
+  AgingView,
+  CreditPanel,
+  DeliveryPanel,
+  OverdueView,
+  PaymentHistory,
+  PaymentPanel,
+  RecurringView,
+  ReminderPanel,
+  StatementView,
+  SummaryCards,
+} from './SalesV12Components';
 
-type SalesView = 'customers' | 'invoices';
+type SalesView = 'customers' | 'invoices' | 'recurring' | 'aging' | 'statement' | 'overdue';
 type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'CREDITED' | 'CANCELLED_DRAFT';
 
 interface TenantOption {
@@ -40,6 +54,10 @@ interface Customer {
   language: string | null;
   payment_terms_days: number | null;
   default_currency: string | null;
+  delivery_method?: string | null;
+  e_invoice_address?: string | null;
+  e_invoice_operator?: string | null;
+  e_invoice_ovt?: string | null;
   is_active: boolean;
 }
 
@@ -95,6 +113,10 @@ interface SalesInvoice {
   credited_by_invoice_id: string | null;
   pdf_status: 'GENERATING' | 'READY' | 'FAILED' | null;
   pdf_failure_reason?: string | null;
+  delivery_status?: string;
+  overdue_days?: number;
+  credited_amount?: string;
+  advance_applied?: string;
   lines?: SalesLine[];
 }
 
@@ -185,6 +207,10 @@ export function SalesPage() {
     payment_terms_days: '14',
     default_currency: 'EUR',
     language: 'fi',
+    delivery_method: 'EMAIL',
+    e_invoice_address: '',
+    e_invoice_operator: '',
+    e_invoice_ovt: '',
   });
   const [editingCustomerId, setEditingCustomerId] = useState('');
   const [registrySelection, setRegistrySelection] = useState<RegistryCompany | null>(null);
@@ -194,6 +220,13 @@ export function SalesPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [invoiceSearch, setInvoiceSearch] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | null>(null);
+  const [actionPanel, setActionPanel] = useState<'' | 'payment' | 'credit' | 'reminder' | 'delivery'>('');
+  const [advanceAllocations, setAdvanceAllocations] = useState<Array<{ advance_invoice_id: string; amount: string }>>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [draftDocumentType, setDraftDocumentType] = useState<'SALES_INVOICE' | 'ADVANCE_INVOICE'>('SALES_INVOICE');
+  const [draftDiscountPercent, setDraftDiscountPercent] = useState('');
+  const [draftDiscountAmount, setDraftDiscountAmount] = useState('');
+  const [draftLanguage, setDraftLanguage] = useState('fi');
 
   const [invoiceCustomerId, setInvoiceCustomerId] = useState('');
   const [issueDate, setIssueDate] = useState(today());
@@ -275,6 +308,10 @@ export function SalesPage() {
       payment_terms_days: '14',
       default_currency: 'EUR',
       language: 'fi',
+      delivery_method: 'EMAIL',
+      e_invoice_address: '',
+      e_invoice_operator: '',
+      e_invoice_ovt: '',
     });
   };
 
@@ -284,6 +321,9 @@ export function SalesPage() {
       const body: Record<string, unknown> = {
         ...customerDraft,
         email: customerDraft.email.trim() ? customerDraft.email.trim() : null,
+        e_invoice_address: customerDraft.e_invoice_address.trim() ? customerDraft.e_invoice_address.trim() : null,
+        e_invoice_operator: customerDraft.e_invoice_operator.trim() ? customerDraft.e_invoice_operator.trim() : null,
+        e_invoice_ovt: customerDraft.e_invoice_ovt.trim() ? customerDraft.e_invoice_ovt.trim() : null,
         payment_terms_days: Number(customerDraft.payment_terms_days),
       };
       if (registrySelection && customerDraft.business_id === registrySelection.business_id) {
@@ -316,6 +356,10 @@ export function SalesPage() {
       payment_terms_days: String(customer.payment_terms_days ?? 14),
       default_currency: customer.default_currency ?? 'EUR',
       language: customer.language ?? 'fi',
+      delivery_method: customer.delivery_method ?? 'EMAIL',
+      e_invoice_address: customer.e_invoice_address ?? '',
+      e_invoice_operator: customer.e_invoice_operator ?? '',
+      e_invoice_ovt: customer.e_invoice_ovt ?? '',
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -382,6 +426,10 @@ export function SalesPage() {
         issue_date: issueDate,
         due_date: dueDate || undefined,
         currency_code: currencyCode,
+        language: draftLanguage,
+        document_type: draftDocumentType,
+        discount_percent: draftDiscountPercent || undefined,
+        discount_amount: draftDiscountAmount || undefined,
         lines: lines
           .filter((line) => line.description.trim())
           .map((line) => ({
@@ -397,6 +445,9 @@ export function SalesPage() {
       setInvoiceCustomerId('');
       setIssueDate(today());
       setDueDate('');
+      setDraftDocumentType('SALES_INVOICE');
+      setDraftDiscountPercent('');
+      setDraftDiscountAmount('');
       setLines([{ key: lineCounter + 1, description: '', quantity: '1', unit: '', unit_price: '', discount_percent: '0', tax_code_id: taxCodes[0]?.id ?? '' }]);
       await loadInvoices();
     }, 'draftCreated');
@@ -411,10 +462,20 @@ export function SalesPage() {
 
   const issueSelected = async (invoiceId: string) => {
     await run(async () => {
-      await api(`/api/v1/sales/invoices/${invoiceId}/issue`, { method: 'POST', csrf, headers });
+      const body = advanceAllocations.length
+        ? { advance_allocations: advanceAllocations.map((row) => ({ advance_invoice_id: row.advance_invoice_id, amount: row.amount })) }
+        : undefined;
+      await api(`/api/v1/sales/invoices/${invoiceId}/issue`, { method: 'POST', csrf, headers, body });
       await openInvoice(invoiceId);
       await loadInvoices();
+      setAdvanceAllocations([]);
     }, 'invoiceIssued');
+  };
+
+  const reloadAfterMutation = async () => {
+    setRefreshKey((value) => value + 1);
+    await loadInvoices();
+    if (selectedInvoice?.id) await openInvoice(selectedInvoice.id);
   };
 
   const cancelDraft = async (invoiceId: string) => {
@@ -424,10 +485,17 @@ export function SalesPage() {
     }, 'draftCancelled');
   };
 
+  const retryPdf = async (invoiceId: string) => {
+    await run(async () => {
+      await api(`/api/v1/sales/invoices/${invoiceId}/pdf/retry`, { method: 'POST', csrf, headers });
+      await openInvoice(invoiceId);
+    }, 'pdfRetryScheduled');
+  };
+
   const creditSelected = async (invoiceId: string) => {
     if (!window.confirm(t('creditConfirm'))) return;
     await run(async () => {
-      await api(`/api/v1/sales/invoices/${invoiceId}/credit`, {
+      await api(`/api/v1/sales/invoices/${invoiceId}/credit-note`, {
         method: 'POST',
         csrf,
         headers,
@@ -436,13 +504,6 @@ export function SalesPage() {
       await openInvoice(invoiceId);
       await loadInvoices();
     }, 'creditCreated');
-  };
-
-  const retryPdf = async (invoiceId: string) => {
-    await run(async () => {
-      await api(`/api/v1/sales/invoices/${invoiceId}/pdf/retry`, { method: 'POST', csrf, headers });
-      await openInvoice(invoiceId);
-    }, 'pdfRetryScheduled');
   };
 
   const downloadPdf = async (invoiceId: string) => {
@@ -515,6 +576,38 @@ export function SalesPage() {
         >
           {t('invoices')}
         </button>
+        <button
+          type="button"
+          data-testid="tab-recurring"
+          className={view === 'recurring' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setView('recurring')}
+        >
+          {t('recurring')}
+        </button>
+        <button
+          type="button"
+          data-testid="tab-aging"
+          className={view === 'aging' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setView('aging')}
+        >
+          {t('arAging')}
+        </button>
+        <button
+          type="button"
+          data-testid="tab-statement"
+          className={view === 'statement' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setView('statement')}
+        >
+          {t('customerStatement')}
+        </button>
+        <button
+          type="button"
+          data-testid="tab-overdue"
+          className={view === 'overdue' ? 'tab-button active' : 'tab-button'}
+          onClick={() => setView('overdue')}
+        >
+          {t('remindersOverdue')}
+        </button>
       </nav>
 
       {view === 'customers' && (
@@ -566,6 +659,37 @@ export function SalesPage() {
                     value={customerDraft.phone}
                     onChange={(event) => setCustomerDraft({ ...customerDraft, phone: event.target.value })}
                   />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="field">
+                  <span>{t('invoiceLanguage')}</span>
+                  <select value={customerDraft.language} onChange={(event) => setCustomerDraft({ ...customerDraft, language: event.target.value })}>
+                    <option value="fi">FI</option>
+                    <option value="en">EN</option>
+                    <option value="et">ET</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('deliveryMethod')}</span>
+                  <select value={customerDraft.delivery_method} onChange={(event) => setCustomerDraft({ ...customerDraft, delivery_method: event.target.value })} data-testid="customer-delivery-method">
+                    <option value="EMAIL">{t('deliveryEmail')}</option>
+                    <option value="E_INVOICE">{t('einvoice')}</option>
+                    <option value="PDF_MANUAL">{t('manualPdf')}</option>
+                    <option value="OTHER">OTHER</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('eInvoiceAddress')}</span>
+                  <input value={customerDraft.e_invoice_address} onChange={(event) => setCustomerDraft({ ...customerDraft, e_invoice_address: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>{t('operatorId')}</span>
+                  <input value={customerDraft.e_invoice_operator} onChange={(event) => setCustomerDraft({ ...customerDraft, e_invoice_operator: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>{t('ovt')}</span>
+                  <input value={customerDraft.e_invoice_ovt} onChange={(event) => setCustomerDraft({ ...customerDraft, e_invoice_ovt: event.target.value })} />
                 </label>
               </div>
               <div className="form-row">
@@ -676,6 +800,7 @@ export function SalesPage() {
 
       {view === 'invoices' && (
         <section data-testid="invoices-panel">
+          <SummaryCards tenantId={tenantId} csrf={csrf} headers={headers as Record<string, string>} refreshKey={refreshKey} />
           <details>
             <summary>{t('newInvoice')}</summary>
             <form className="card form-stack" data-testid="invoice-draft-form">
@@ -700,6 +825,33 @@ export function SalesPage() {
                 <label className="field">
                   <span>{t('currency')}</span>
                   <input maxLength={3} value={currencyCode} onChange={(event) => setCurrencyCode(event.target.value.toUpperCase())} />
+                </label>
+                <label className="field">
+                  <span>{t('invoice')}</span>
+                  <select
+                    value={draftDocumentType}
+                    onChange={(event) => setDraftDocumentType(event.target.value as 'SALES_INVOICE' | 'ADVANCE_INVOICE')}
+                    data-testid="draft-document-type"
+                  >
+                    <option value="SALES_INVOICE">{t('invoice')}</option>
+                    <option value="ADVANCE_INVOICE">{t('advanceInvoice')}</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('invoiceLanguage')}</span>
+                  <select value={draftLanguage} onChange={(event) => setDraftLanguage(event.target.value)}>
+                    <option value="fi">FI</option>
+                    <option value="en">EN</option>
+                    <option value="et">ET</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('discountPercent')}</span>
+                  <input type="number" min="0" max="100" step="0.01" value={draftDiscountPercent} onChange={(event) => setDraftDiscountPercent(event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>{t('discountAmount')}</span>
+                  <input type="number" min="0" step="0.01" value={draftDiscountAmount} onChange={(event) => setDraftDiscountAmount(event.target.value)} />
                 </label>
               </div>
               {lines.map((line) => (
@@ -822,7 +974,9 @@ export function SalesPage() {
                 <th>{t('total')}</th>
                 <th>{t('paid')}</th>
                 <th>{t('openBalance')}</th>
+                <th>{t('paymentStatus')}</th>
                 <th>{t('status')}</th>
+                <th>{t('deliveryStatus')}</th>
                 <th>{t('actions')}</th>
               </tr>
             </thead>
@@ -836,7 +990,9 @@ export function SalesPage() {
                   <td className="num">{money(invoice.total)}</td>
                   <td className="num">{money(invoice.amount_paid ?? '0')}</td>
                   <td className="num">{money(invoice.open_balance ?? invoice.total)}</td>
+                  <td>{invoice.payment_status ?? t(String(invoice.status).toLowerCase() as any)}</td>
                   <td>{t(String(invoice.status).toLowerCase() as any)}</td>
+                  <td>{invoice.delivery_status ?? '–'}</td>
                   <td>
                     <button type="button" onClick={() => void openInvoice(invoice.id)}>{t('openInvoice')}</button>
                     {invoice.status === 'DRAFT' && (
@@ -929,8 +1085,59 @@ export function SalesPage() {
               {detail.pdf_status === 'FAILED' && (
                 <button type="button" onClick={() => void retryPdf(detail.id)}>{t('retryPdf')}</button>
               )}
-              {detail.status === 'ISSUED' && (
-                <button type="button" onClick={() => void creditSelected(detail.id)}>{t('creditInvoice')}</button>
+              {detail.status === 'DRAFT' && (
+                <>
+                  <button type="button" className="primary" onClick={() => void issueSelected(detail.id)} data-testid="detail-issue">
+                    {t('issue')}
+                  </button>
+                  <button type="button" onClick={() => void cancelDraft(detail.id)}>{t('cancelDraft')}</button>
+                </>
+              )}
+              {['ISSUED', 'PARTIALLY_PAID'].includes(detail.status) && (
+                <>
+                  <button type="button" onClick={() => setActionPanel(actionPanel === 'payment' ? '' : 'payment')} data-testid="open-payment">
+                    {t('recordPayment')}
+                  </button>
+                  <button type="button" onClick={() => void creditSelected(detail.id)}>
+                    {t('creditInvoice')}
+                  </button>
+                  <button type="button" onClick={() => setActionPanel(actionPanel === 'credit' ? '' : 'credit')} data-testid="open-credit">
+                    {t('partialCredit')}
+                  </button>
+                  <button type="button" onClick={() => setActionPanel(actionPanel === 'reminder' ? '' : 'reminder')} data-testid="open-reminder">
+                    {t('remindersOverdue')}
+                  </button>
+                  <button type="button" onClick={() => setActionPanel(actionPanel === 'delivery' ? '' : 'delivery')} data-testid="open-delivery">
+                    {t('sendInvoice')}
+                  </button>
+                </>
+              )}
+              {detail.status === 'DRAFT' && (
+                <AdvanceAllocationPanel
+                  invoice={detail}
+                  tenantId={tenantId}
+                  csrf={csrf}
+                  headers={headers as Record<string, string>}
+                  onAllocations={setAdvanceAllocations}
+                />
+              )}
+              {actionPanel === 'payment' && (
+                <PaymentPanel invoice={detail} tenantId={tenantId} csrf={csrf} headers={headers as Record<string, string>} onChanged={reloadAfterMutation} />
+              )}
+              {actionPanel === 'credit' && (
+                <CreditPanel invoice={detail} tenantId={tenantId} csrf={csrf} headers={headers as Record<string, string>} onChanged={reloadAfterMutation} />
+              )}
+              {actionPanel === 'reminder' && (
+                <ReminderPanel invoice={detail} tenantId={tenantId} csrf={csrf} headers={headers as Record<string, string>} onChanged={reloadAfterMutation} />
+              )}
+              {actionPanel === 'delivery' && (
+                <DeliveryPanel invoice={detail} tenantId={tenantId} csrf={csrf} headers={headers as Record<string, string>} onChanged={reloadAfterMutation} />
+              )}
+              {['ISSUED', 'PARTIALLY_PAID'].includes(detail.status) && (
+                <PaymentHistory invoiceId={detail.id} tenantId={tenantId} headers={headers as Record<string, string>} />
+              )}
+              {['ISSUED', 'PARTIALLY_PAID', 'CREDITED'].includes(detail.status) && (
+                <AdvanceStateSection invoiceId={detail.id} tenantId={tenantId} headers={headers as Record<string, string>} />
               )}
               {detail.accounting_journal_entry_id && (
                 <p className="muted">
@@ -941,6 +1148,45 @@ export function SalesPage() {
             </div>
           )}
         </section>
+      )}
+
+      {view === 'recurring' && (
+        <RecurringView
+          tenantId={tenantId}
+          csrf={csrf}
+          headers={headers as Record<string, string>}
+          customers={customers}
+        />
+      )}
+
+      {view === 'aging' && (
+        <AgingView
+          tenantId={tenantId}
+          csrf={csrf}
+          headers={headers as Record<string, string>}
+          customers={customers}
+        />
+      )}
+
+      {view === 'statement' && (
+        <StatementView
+          tenantId={tenantId}
+          csrf={csrf}
+          headers={headers as Record<string, string>}
+          customers={customers}
+        />
+      )}
+
+      {view === 'overdue' && (
+        <OverdueView
+          tenantId={tenantId}
+          csrf={csrf}
+          headers={headers as Record<string, string>}
+          onOpenInvoice={(id) => {
+            setView('invoices');
+            void openInvoice(id);
+          }}
+        />
       )}
     </div>
   );

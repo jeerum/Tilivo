@@ -39,7 +39,7 @@ async function jsonApi(
 
 async function tenantId(page: Page): Promise<string> {
   const tenants = await jsonApi(page, '', 'GET', '/api/v1/tenants');
-  const tenant = tenants.payload?.tenants?.[0];
+  const tenant = tenants.payload?.tenants?.find((entry: any) => String(entry.name).includes('Accounting QA Tenant'));
   if (!tenant?.id) throw new Error('No tenant found for e2e user');
   return String(tenant.id);
 }

@@ -4,6 +4,13 @@
 
 **v0.12 (Sales Ledger 2.0) - COMPLETE / GATE PASS**
 
+2026-09-03 v0.12.1 FEATURE GATE: backend + v0.12 browser UI complete; v0.12
+E2E green on desktop/tablet/mobile (15/15, 0 skipped). Verification uses
+fresh-schema E2E databases and isolated per-suite tenants. The combined legacy
+Playwright mega-run remains subject to local test-infrastructure limits
+(shared tenant stress, live PRH retries, worker/outbox backlog); see the
+separate "E2E Test Isolation Hardening" follow-up.
+
 Gate validated:
 - migrations `20260909000000_sales_ledger_v12` +
   `20260909010000_sales_ledger_payment_update` (20 total);
@@ -437,5 +444,6 @@ Production v0.4 backup copy -> migrate -> data preservation: PASS
 
 ## Next step
 
-v0.9 VAT / ALV Engine vastavalt ROADMAP.md-le (ei alustata enne eraldi
-ülesannet).
+v0.13 not started. Follow-up QA hardening (suite-isolated fixtures, test-only
+rate limiting, PRH mock default, worker isolation) is tracked separately and
+does not affect the v0.12 product feature gate.

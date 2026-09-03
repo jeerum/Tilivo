@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/pool';
 import { withTenantTransaction } from './tenantService';
 import { getInvoiceForPdf } from './salesService';
-import { pdfSha256, renderInvoicePdf } from './invoicePdf';
+import { pdfSha256, renderInvoicePdf, renderReminderPdf } from './invoicePdf';
 import { writeAuditEventStandalone } from './audit';
 import type { OutboxEvent } from './integrationQueue';
 import type { LocalObjectStorageProvider } from './documentStorage';
@@ -92,6 +92,85 @@ export async function processPdfRequest(
       objectType: 'sales_invoice',
       objectId: invoiceId,
       metadata: { invoice_id: invoiceId, reason: message },
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Handles a SALES_REMINDER_PDF_REQUESTED outbox event idempotently.
+ */
+export async function processReminderPdfRequest(
+  pool: Db,
+  storage: LocalObjectStorageProvider,
+  event: OutboxEvent,
+): Promise<void> {
+  const tenantId = event.tenant_id;
+  const reminderId = event.aggregate_id;
+  try {
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      const reminderRow = await client.query(
+        `SELECT * FROM sales_reminders
+         WHERE id = $1 AND tenant_id = $2
+         FOR UPDATE`,
+        [reminderId, tenantId],
+      );
+      if (!reminderRow.rows[0]) throw new Error('sales_reminder row is missing');
+      if (reminderRow.rows[0].pdf_status === 'READY') return;
+      const invoice = await getInvoiceForPdf(client, tenantId, String(reminderRow.rows[0].invoice_id));
+      if (!['ISSUED', 'PARTIALLY_PAID'].includes(String(invoice.status))) {
+        throw new Error('invoice is not issued for reminder');
+      }
+      const data = renderReminderPdf({
+        invoice,
+        reminder: reminderRow.rows[0],
+      });
+      const sha256 = pdfSha256(data);
+      const storageKey = `${tenantId}/sales-reminders/${reminderId}/${randomUUID()}.pdf`;
+      await storage.put(storageKey, data);
+      const document = await client.query(
+        `INSERT INTO documents (tenant_id, type, status)
+         VALUES ($1, 'SALES_REMINDER_PDF', 'UPLOADED')
+         RETURNING id`,
+        [tenantId],
+      );
+      const documentId = String(document.rows[0].id);
+      const filename = `${String(reminderRow.rows[0].reminder_number ?? reminderId)}.pdf`;
+      await client.query(
+        `INSERT INTO document_versions
+           (tenant_id, document_id, version_number, storage_key, original_filename,
+            mime_type, size_bytes, sha256)
+         VALUES ($1, $2, 1, $3, $4, 'application/pdf', $5, $6)`,
+        [tenantId, documentId, storageKey, filename, data.length, sha256],
+      );
+      await client.query(
+        `UPDATE sales_reminders
+         SET pdf_status = 'READY', pdf_document_id = $2, last_error = NULL
+         WHERE id = $1 AND tenant_id = $3`,
+        [reminderId, documentId, tenantId],
+      );
+    });
+    await writeAuditEventStandalone(pool, 'SALES_REMINDER.PDF_READY', {
+      tenantId,
+      objectType: 'sales_reminder',
+      objectId: reminderId,
+      metadata: { reminder_id: reminderId },
+    }).catch(() => undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 400) : 'Reminder PDF generation failed';
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query(
+        `UPDATE sales_reminders
+         SET pdf_status = 'FAILED', last_error = $3
+         WHERE id = $1 AND tenant_id = $2 AND pdf_status <> 'READY'`,
+        [reminderId, tenantId, message],
+      );
+    }).catch(() => undefined);
+    await writeAuditEventStandalone(pool, 'SALES_REMINDER.PDF_FAILED', {
+      tenantId,
+      objectType: 'sales_reminder',
+      objectId: reminderId,
+      metadata: { reminder_id: reminderId, reason: message },
     }).catch(() => undefined);
     throw error;
   }

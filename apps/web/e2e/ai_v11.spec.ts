@@ -40,7 +40,8 @@ async function jsonApi(
 async function tenantId(page: Page): Promise<string> {
   await page.goto('/');
   const tenants = await jsonApi(page, '', 'GET', '/api/v1/tenants');
-  return String(tenants.payload.tenants[0].id);
+  const tenant = tenants.payload?.tenants?.find((entry: any) => String(entry.name).includes('AI QA Tenant'));
+  return String(tenant?.id ?? tenants.payload?.tenants?.[0]?.id);
 }
 
 async function seed(page: Page, tenant: string, year: number): Promise<{ documentId: string; merchant: string; officeCode: string }> {
