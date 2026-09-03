@@ -17,6 +17,7 @@ import { tenantRoutes } from './routes/tenant';
 import { documentRoutes } from './routes/documents';
 import { accountingRoutes } from './routes/accounting';
 import { salesRoutes } from './routes/sales';
+import { purchaseRoutes } from './routes/purchases';
 import { createEmailProvider } from './services/emailProvider';
 import { findSessionByToken } from './services/sessionService';
 import { hashToken } from './lib/security';
@@ -198,5 +199,6 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
   });
   await app.register(accountingRoutes, { db, config });
   await app.register(salesRoutes, { db, config, storage });
+  await app.register(purchaseRoutes, { db, config, storage });
   return app;
 }

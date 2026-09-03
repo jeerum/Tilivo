@@ -161,9 +161,9 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     // Apply all remaining release migrations (v0.5 accounting + v0.6 sales).
     await runMigrations(withDatabase(adminUrl!, dbName));
     const after = await adminDb.query('SELECT count(*)::int AS count FROM pgmigrations');
-    // Release migrations after v0.4: accounting core, accounting hardening,
-    // tax uniqueness and the v0.6 sales core migration.
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 4);
+    // Release migrations after v0.4: accounting core, hardening, tax
+    // uniqueness, v0.6 sales core and v0.7 purchases core.
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 5);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(
@@ -192,7 +192,10 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
          ('accounts','fiscal_years','accounting_periods','currencies','tax_codes','fx_rates',
           'journal_sequences','journal_entries','journal_lines','journal_reversals',
           'business_parties','invoice_number_series','sales_settings','sales_invoices',
-          'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs')`,
+          'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs',
+          'purchase_invoices','purchase_invoice_lines','purchase_invoice_documents',
+          'purchase_invoice_approvals','purchase_invoice_extractions',
+          'purchase_invoice_corrections','purchase_imports','purchase_settings')`,
     );
     const names = (tables.rows as Array<{ table_name: string }>).map((r) => r.table_name).sort();
     expect(names).toEqual([
@@ -207,6 +210,14 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
       'journal_lines',
       'journal_reversals',
       'journal_sequences',
+      'purchase_imports',
+      'purchase_invoice_approvals',
+      'purchase_invoice_corrections',
+      'purchase_invoice_documents',
+      'purchase_invoice_extractions',
+      'purchase_invoice_lines',
+      'purchase_invoices',
+      'purchase_settings',
       'sales_invoice_credit_links',
       'sales_invoice_lines',
       'sales_invoice_pdfs',
@@ -223,10 +234,13 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
        WHERE key IN ('accounting.read','journal.create','journal.post','journal.reverse',
                      'period.manage','period.reopen','chart.manage',
                      'sales.read','sales.customer.manage','invoice.create','invoice.issue',
-                     'invoice.credit','invoice.pdf.retry','sales.settings.manage')
+                     'invoice.credit','invoice.pdf.retry','sales.settings.manage',
+                     'purchase.read','purchase.create','purchase.edit','purchase.review',
+                     'purchase.approve','purchase.post','purchase.reject','purchase.correct',
+                     'supplier.manage','purchase.settings.manage','purchase.document.upload')
        ORDER BY key`,
     );
-    expect(permissions.rows).toHaveLength(14);
+    expect(permissions.rows).toHaveLength(25);
     const grants = await adminDb.query(
       `SELECT r.name, count(*)::int AS grant_count
        FROM role_permissions rp
@@ -235,16 +249,19 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
        WHERE p.key IN ('accounting.read','journal.create','journal.post','journal.reverse',
                        'period.manage','period.reopen','chart.manage',
                        'sales.read','sales.customer.manage','invoice.create','invoice.issue',
-                       'invoice.credit','invoice.pdf.retry','sales.settings.manage')
+                       'invoice.credit','invoice.pdf.retry','sales.settings.manage',
+                       'purchase.read','purchase.create','purchase.edit','purchase.review',
+                       'purchase.approve','purchase.post','purchase.reject','purchase.correct',
+                       'supplier.manage','purchase.settings.manage','purchase.document.upload')
        GROUP BY r.name
        ORDER BY r.name`,
     );
     const grantMap = new Map<string, number>();
     for (const row of grants.rows) grantMap.set(String(row.name), Number(row.grant_count));
-    expect(grantMap.get('Owner')).toBe(14);
-    expect(grantMap.get('Admin')).toBe(14);
-    expect(grantMap.get('Accountant')).toBe(9);
-    expect(grantMap.get('Viewer')).toBe(1);
+    expect(grantMap.get('Owner')).toBe(25);
+    expect(grantMap.get('Admin')).toBe(25);
+    expect(grantMap.get('Accountant')).toBe(19);
+    expect(grantMap.get('Viewer')).toBe(2);
 
     // RLS is active and forced on accounting tables.
     const rls = await adminDb.query(
@@ -255,10 +272,13 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
          ('accounts','fiscal_years','accounting_periods','tax_codes','fx_rates',
           'journal_entries','journal_lines','journal_reversals',
           'business_parties','invoice_number_series','sales_settings','sales_invoices',
-          'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs')
+          'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs',
+          'purchase_invoices','purchase_invoice_lines','purchase_invoice_documents',
+          'purchase_invoice_approvals','purchase_invoice_extractions',
+          'purchase_invoice_corrections','purchase_imports','purchase_settings')
        ORDER BY c.relname`,
     );
-    expect(rls.rows).toHaveLength(15);
+    expect(rls.rows).toHaveLength(23);
     for (const row of rls.rows) {
       expect(Boolean(row.relrowsecurity)).toBe(true);
       expect(Boolean(row.relforcerowsecurity)).toBe(true);
@@ -284,7 +304,10 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
        WHERE tgname IN ('tilivo_journal_entries_immutable','tilivo_journal_lines_immutable',
                         'tilivo_journal_lines_insert_immutable','tilivo_journal_reversal_validate',
                         'tilivo_sales_invoices_immutable','tilivo_sales_invoice_lines_immutable',
-                        'tilivo_sales_credit_link_validate','tilivo_sales_invoice_pdfs_immutable')
+                        'tilivo_sales_credit_link_validate','tilivo_sales_invoice_pdfs_immutable',
+                        'tilivo_purchase_invoices_immutable','tilivo_purchase_lines_immutable',
+                        'tilivo_purchase_invoice_approvals_immutable',
+                        'tilivo_purchase_invoice_extractions_immutable')
        ORDER BY tgname`,
     );
     const triggerNames = (triggers.rows as Array<{ tgname: string }>).map((r) => r.tgname);
@@ -296,6 +319,10 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     expect(triggerNames).toContain('tilivo_sales_invoice_lines_immutable');
     expect(triggerNames).toContain('tilivo_sales_credit_link_validate');
     expect(triggerNames).toContain('tilivo_sales_invoice_pdfs_immutable');
+    expect(triggerNames).toContain('tilivo_purchase_invoices_immutable');
+    expect(triggerNames).toContain('tilivo_purchase_lines_immutable');
+    expect(triggerNames).toContain('tilivo_purchase_invoice_approvals_immutable');
+    expect(triggerNames).toContain('tilivo_purchase_invoice_extractions_immutable');
 
     // v0.6 upgrade seeded one default series and settings for the old tenant.
     const salesSeed = await adminDb.query(
@@ -305,6 +332,12 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     );
     expect(salesSeed.rows[0]!.series).toBeGreaterThanOrEqual(1);
     expect(salesSeed.rows[0]!.settings).toBe(1);
+
+    const purchaseSeed = await adminDb.query(
+      `SELECT count(*)::int AS settings FROM purchase_settings
+       WHERE tenant_id = '00000000-0000-4000-8000-000000000001'`,
+    );
+    expect(purchaseSeed.rows[0]!.settings).toBe(1);
 
     // RLS visibility works for the runtime role on accounting data.
     await adminDb.query(

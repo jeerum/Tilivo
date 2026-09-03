@@ -1,0 +1,1392 @@
+import Decimal from 'decimal.js';
+import type { Db, DbClient } from '../db/pool';
+import { AppError, ErrorCodes } from '../lib/errors';
+import {
+  normalizeSupplierInvoiceNumber,
+  parseEinvoice,
+  type CanonicalPurchaseInvoice,
+  type EinvoiceFormat,
+} from './purchaseInvoiceParsers';
+import { withTenantTransaction } from './tenantService';
+import { createJournalDraftInTransaction, postJournalEntryInTransaction } from './accountingService';
+import { uploadDocument, type LocalObjectStorageProvider } from './documentStorage';
+
+export type PurchaseStatus =
+  | 'INGESTED'
+  | 'DRAFT'
+  | 'NEEDS_REVIEW'
+  | 'READY_FOR_APPROVAL'
+  | 'APPROVED'
+  | 'POSTED'
+  | 'REJECTED'
+  | 'CANCELLED_DRAFT'
+  | 'CORRECTED';
+
+export interface PurchaseLineDraft {
+  description: string;
+  quantity?: string | null;
+  unit?: string | null;
+  unit_price?: string | null;
+  net_amount?: string | null;
+  tax_code_id: string;
+  tax_rate?: string | null;
+  tax_type?: string | null;
+  tax_amount?: string | null;
+  expense_account_id: string;
+  cost_center?: string | null;
+}
+
+export interface PurchaseDraftInput {
+  supplier_id: string;
+  supplier_invoice_number?: string;
+  invoice_date: string;
+  due_date?: string;
+  currency_code?: string;
+  supplier_reference?: string | null;
+  supplier_iban?: string | null;
+  source_type?: string;
+  lines: PurchaseLineDraft[];
+}
+
+export interface SupplierInput {
+  name: string;
+  business_id?: string | null;
+  vat_id?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  postal_code?: string | null;
+  city?: string | null;
+  country_code?: string;
+  language?: string;
+  payment_terms_days?: number;
+  default_currency?: string;
+  iban?: string | null;
+  e_invoice_address?: string | null;
+  e_invoice_operator?: string | null;
+  default_expense_account_id?: string | null;
+  default_tax_code_id?: string | null;
+}
+
+export interface PurchaseSettingsPatch {
+  accounts_payable_account_id?: string | null;
+  default_expense_account_id?: string | null;
+  input_vat_account_id?: string | null;
+  reverse_charge_input_account_id?: string | null;
+  reverse_charge_output_account_id?: string | null;
+  require_separate_approver?: boolean;
+  auto_post_on_approval?: boolean;
+  default_currency?: string;
+}
+
+Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
+const cents = (value: Decimal | string): Decimal => new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+const today = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+function toDateString(value: unknown): string {
+  if (value instanceof Date) {
+    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+  }
+  const raw = String(value ?? '');
+  return raw.slice(0, 10);
+}
+
+function normalizeRow(row: any): any {
+  if (!row) return row;
+  for (const key of ['invoice_date', 'due_date', 'created_at', 'updated_at', 'reviewed_at', 'approved_at', 'posted_at']) {
+    if (row[key] && !(typeof row[key] === 'string')) row[key] = toDateString(row[key]);
+  }
+  for (const key of ['subtotal', 'tax_total', 'total', 'source_total', 'net_amount', 'tax_amount', 'gross_amount', 'unit_price', 'quantity']) {
+    if (row[key] === undefined || row[key] === null || row[key] === '') continue;
+    const numeric = Number(row[key]);
+    if (Number.isFinite(numeric)) row[key] = numeric.toFixed(2);
+  }
+  return row;
+}
+
+async function ensurePurchaseSettingsRow(client: DbClient, tenantId: string): Promise<any> {
+  const existing = await client.query('SELECT * FROM purchase_settings WHERE tenant_id = $1', [tenantId]);
+  if (existing.rows[0]) return existing.rows[0];
+  const company = await client.query(
+    `SELECT id FROM companies WHERE tenant_id = $1 AND status = 'ACTIVE' ORDER BY created_at LIMIT 1`,
+    [tenantId],
+  );
+  const inserted = await client.query(
+    `INSERT INTO purchase_settings (tenant_id, company_id, require_separate_approver, auto_post_on_approval, default_currency)
+     VALUES ($1, $2, false, false, 'EUR')
+     ON CONFLICT (tenant_id) DO NOTHING
+     RETURNING *`,
+    [tenantId, company.rows[0]?.id ?? null],
+  );
+  if (inserted.rows[0]) return inserted.rows[0];
+  const readAgain = await client.query('SELECT * FROM purchase_settings WHERE tenant_id = $1', [tenantId]);
+  if (!readAgain.rows[0]) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Purchase settings unavailable', 500);
+  return readAgain.rows[0];
+}
+
+async function validateCurrency(client: DbClient, code: string): Promise<void> {
+  const result = await client.query('SELECT code FROM currencies WHERE code = $1 AND is_active', [code]);
+  if (!result.rows[0]) throw new AppError(ErrorCodes.currencyInvalid, 'Currency is not active', 400);
+}
+
+// ---------------------------------------------------------------------------
+// Suppliers
+// ---------------------------------------------------------------------------
+export async function listSuppliers(
+  pool: Db,
+  tenantId: string,
+  filters: { search?: string; active?: boolean; limit?: number; offset?: number } = {},
+): Promise<{ suppliers: any[]; total: number }> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [tenantId];
+    if (filters.search) {
+      values.push(`%${filters.search}%`);
+      clauses.push(
+        `(name ILIKE $${values.length} OR business_id ILIKE $${values.length} OR vat_id ILIKE $${values.length})`,
+      );
+    }
+    if (filters.active !== undefined) {
+      values.push(filters.active);
+      clauses.push(`is_active = $${values.length}`);
+    }
+    const where = `WHERE tenant_id = $1 AND is_supplier${clauses.length ? ` AND ${clauses.join(' AND ')}` : ''}`;
+    const total = await client.query(`SELECT count(*)::int AS total FROM business_parties ${where}`, values);
+    const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+    const offset = Math.max(filters.offset ?? 0, 0);
+    const rows = await client.query(
+      `SELECT * FROM business_parties ${where}
+       ORDER BY name, created_at LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, limit, offset],
+    );
+    return { suppliers: rows.rows.map(normalizeRow), total: Number(total.rows[0]?.total ?? 0) };
+  });
+}
+
+export async function getSupplier(pool: Db, tenantId: string, supplierId: string): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
+      [supplierId, tenantId],
+    );
+    if (!result.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+    return normalizeRow(result.rows[0]);
+  });
+}
+
+export async function createSupplier(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  input: SupplierInput,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const name = String(input.name ?? '').trim();
+    if (!name) throw new AppError(ErrorCodes.invalidCustomer, 'Supplier name is required', 400);
+    const currency = String(input.default_currency ?? 'EUR').toUpperCase();
+    await validateCurrency(client, currency);
+    if (input.default_expense_account_id) {
+      const account = await client.query(
+        'SELECT id FROM accounts WHERE id = $1 AND tenant_id = $2',
+        [input.default_expense_account_id, tenantId],
+      );
+      if (!account.rows[0]) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Expense account outside tenant', 400);
+    }
+    const result = await client.query(
+      `INSERT INTO business_parties
+         (tenant_id, name, is_customer, is_supplier, business_id, vat_id, email, phone,
+          address_line1, address_line2, postal_code, city, country_code, language,
+          payment_terms_days, default_currency, iban, e_invoice_address, e_invoice_operator,
+          default_expense_account_id, default_tax_code_id, is_active)
+       VALUES ($1, $2, false, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, true)
+       RETURNING *`,
+      [
+        tenantId,
+        name,
+        input.business_id || null,
+        input.vat_id || null,
+        input.email || null,
+        input.phone || null,
+        input.address_line1 || null,
+        input.address_line2 || null,
+        input.postal_code || null,
+        input.city || null,
+        String(input.country_code ?? 'FI').toUpperCase(),
+        String(input.language ?? 'fi').toLowerCase(),
+        input.payment_terms_days ?? 14,
+        currency,
+        input.iban || null,
+        input.e_invoice_address || null,
+        input.e_invoice_operator || null,
+        input.default_expense_account_id || null,
+        input.default_tax_code_id || null,
+      ],
+    );
+    return normalizeRow(result.rows[0]);
+  });
+}
+
+export async function updateSupplier(
+  pool: Db,
+  tenantId: string,
+  supplierId: string,
+  patch: Partial<SupplierInput>,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const current = await client.query(
+      'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2',
+      [supplierId, tenantId],
+    );
+    if (!current.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+    const sets: string[] = [];
+    const values: unknown[] = [supplierId, tenantId];
+    const setValue = (column: string, value: unknown) => {
+      values.push(value);
+      sets.push(`${column} = $${values.length}`);
+    };
+    if (patch.name !== undefined) setValue('name', String(patch.name).trim());
+    if (patch.business_id !== undefined) setValue('business_id', patch.business_id || null);
+    if (patch.vat_id !== undefined) setValue('vat_id', patch.vat_id || null);
+    if (patch.email !== undefined) setValue('email', patch.email || null);
+    if (patch.phone !== undefined) setValue('phone', patch.phone || null);
+    if (patch.address_line1 !== undefined) setValue('address_line1', patch.address_line1 || null);
+    if (patch.address_line2 !== undefined) setValue('address_line2', patch.address_line2 || null);
+    if (patch.postal_code !== undefined) setValue('postal_code', patch.postal_code || null);
+    if (patch.city !== undefined) setValue('city', patch.city || null);
+    if (patch.country_code !== undefined) setValue('country_code', String(patch.country_code).toUpperCase());
+    if (patch.language !== undefined) setValue('language', String(patch.language).toLowerCase());
+    if (patch.payment_terms_days !== undefined) setValue('payment_terms_days', patch.payment_terms_days);
+    if (patch.default_currency !== undefined) {
+      await validateCurrency(client, String(patch.default_currency).toUpperCase());
+      setValue('default_currency', String(patch.default_currency).toUpperCase());
+    }
+    if (patch.iban !== undefined) setValue('iban', patch.iban || null);
+    if (patch.e_invoice_address !== undefined) setValue('e_invoice_address', patch.e_invoice_address || null);
+    if (patch.e_invoice_operator !== undefined) setValue('e_invoice_operator', patch.e_invoice_operator || null);
+    if (patch.default_expense_account_id !== undefined) setValue('default_expense_account_id', patch.default_expense_account_id || null);
+    if (patch.default_tax_code_id !== undefined) setValue('default_tax_code_id', patch.default_tax_code_id || null);
+    if (sets.length === 0) throw new AppError(ErrorCodes.invalidRequest, 'No supplier fields to update', 400);
+    sets.push('updated_at = now()');
+    const result = await client.query(
+      `UPDATE business_parties SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      values,
+    );
+    return normalizeRow(result.rows[0]);
+  });
+}
+
+export async function setSupplierActive(
+  pool: Db,
+  tenantId: string,
+  supplierId: string,
+  active: boolean,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      `UPDATE business_parties SET is_active = $3, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND is_supplier RETURNING *`,
+      [supplierId, tenantId, active],
+    );
+    if (!result.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+    return normalizeRow(result.rows[0]);
+  });
+}
+
+export async function getPurchaseSettings(pool: Db, tenantId: string): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const settings = await ensurePurchaseSettingsRow(client, tenantId);
+    return normalizeRow(settings);
+  });
+}
+
+export async function updatePurchaseSettings(
+  pool: Db,
+  tenantId: string,
+  patch: PurchaseSettingsPatch,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    await ensurePurchaseSettingsRow(client, tenantId);
+    const sets: string[] = [];
+    const values: unknown[] = [tenantId];
+    const add = (column: string, value: unknown) => {
+      values.push(value);
+      sets.push(`${column} = $${values.length}`);
+    };
+    const accountFields: Array<[string, unknown]> = [
+      ['accounts_payable_account_id', patch.accounts_payable_account_id],
+      ['default_expense_account_id', patch.default_expense_account_id],
+      ['input_vat_account_id', patch.input_vat_account_id],
+      ['reverse_charge_input_account_id', patch.reverse_charge_input_account_id],
+      ['reverse_charge_output_account_id', patch.reverse_charge_output_account_id],
+    ];
+    if (accountFields.some(([, value]) => value !== undefined)) {
+      for (const [column, value] of accountFields) {
+        if (value) {
+          const account = await client.query(
+            'SELECT id FROM accounts WHERE id = $1 AND tenant_id = $2',
+            [value, tenantId],
+          );
+          if (!account.rows[0]) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Account outside tenant', 400);
+        }
+        add(column, value || null);
+      }
+    }
+    if (patch.require_separate_approver !== undefined) add('require_separate_approver', patch.require_separate_approver);
+    if (patch.auto_post_on_approval !== undefined) add('auto_post_on_approval', patch.auto_post_on_approval);
+    if (patch.default_currency !== undefined) {
+      await validateCurrency(client, patch.default_currency.toUpperCase());
+      add('default_currency', patch.default_currency.toUpperCase());
+    }
+    if (sets.length === 0) throw new AppError(ErrorCodes.invalidRequest, 'No purchase settings to update', 400);
+    sets.push('updated_at = now()');
+    const result = await client.query(
+      `UPDATE purchase_settings SET ${sets.join(', ')} WHERE tenant_id = $1 RETURNING *`,
+      values,
+    );
+    return normalizeRow(result.rows[0]);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Line/total math and helpers
+// ---------------------------------------------------------------------------
+function loadTaxCodesForDate(client: DbClient, tenantId: string, ids: string[], date: string): Promise<Map<string, any>> {
+  return client.query(
+    `SELECT id, code, rate, type, reporting_mapping FROM tax_codes
+     WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND is_active
+       AND effective_from <= $3::date AND (effective_to IS NULL OR effective_to >= $3::date)`,
+    [tenantId, ids, date],
+  ).then((result) => {
+    const map = new Map<string, any>();
+    for (const row of result.rows) map.set(String(row.id), row);
+    return map;
+  });
+}
+
+export function computePurchaseLine(input: {
+  quantity?: string | null;
+  unitPrice?: string | null;
+  netAmount?: string | null;
+  taxRate: string;
+  taxType: string;
+}): { net: string; tax: string; gross: string } {
+  let net: Decimal;
+  if (input.netAmount !== null && input.netAmount !== undefined) {
+    net = cents(new Decimal(input.netAmount));
+  } else {
+    const quantity = new Decimal(input.quantity ?? '1');
+    const unitPrice = new Decimal(input.unitPrice ?? '0');
+    net = cents(quantity.mul(unitPrice));
+  }
+  const rate = new Decimal(input.taxRate);
+  const reverse = input.taxType === 'REVERSE_CHARGE';
+  const tax = reverse ? new Decimal(0) : cents(net.mul(rate).div(100));
+  return {
+    net: net.toFixed(2),
+    tax: tax.toFixed(2),
+    gross: net.plus(tax).toFixed(2),
+  };
+}
+
+function supplierSnapshot(row: any): Record<string, unknown> {
+  return {
+    name: row.name,
+    business_id: row.business_id,
+    vat_id: row.vat_id,
+    address_line1: row.address_line1,
+    address_line2: row.address_line2,
+    postal_code: row.postal_code,
+    city: row.city,
+    country_code: row.country_code,
+    iban: row.iban,
+    e_invoice_address: row.e_invoice_address,
+    e_invoice_operator: row.e_invoice_operator,
+  };
+}
+
+async function validateLines(
+  client: DbClient,
+  tenantId: string,
+  invoiceDate: string,
+  lines: PurchaseLineDraft[],
+  defaultExpenseAccountId?: string | null,
+): Promise<Array<{ input: PurchaseLineDraft; tax: any; computed: ReturnType<typeof computePurchaseLine>; expenseAccountId: string }>> {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new AppError(ErrorCodes.purchaseHasNoLines, 'Purchase invoice requires lines', 400);
+  }
+  const taxIds = [...new Set(lines.map((line) => line.tax_code_id))];
+  const taxMap = await loadTaxCodesForDate(client, tenantId, taxIds, invoiceDate);
+  const accountIds = [...new Set(lines.map((line) => line.expense_account_id))].filter(
+    (id): id is string => typeof id === 'string' && id.length > 0,
+  );
+  const accounts = accountIds.length
+    ? await client.query('SELECT id FROM accounts WHERE tenant_id = $1 AND id = ANY($2::uuid[])', [
+        tenantId,
+        accountIds,
+      ])
+    : { rows: [] as any[] };
+  const accountSet = new Set(accounts.rows.map((row: any) => String(row.id)));
+  const result: Array<{ input: PurchaseLineDraft; tax: any; computed: ReturnType<typeof computePurchaseLine>; expenseAccountId: string }> = [];
+  for (const line of lines) {
+    if (!String(line.description ?? '').trim()) {
+      throw new AppError(ErrorCodes.invalidPurchaseLine, 'Line description is required', 400);
+    }
+    const tax = taxMap.get(line.tax_code_id);
+    if (!tax) throw new AppError(ErrorCodes.invoiceTaxCodeInvalid, 'Tax code is not active for the invoice date', 400);
+    const expenseAccountId = line.expense_account_id ?? defaultExpenseAccountId;
+    if (!expenseAccountId || !accountSet.has(String(expenseAccountId))) {
+      throw new AppError(ErrorCodes.invalidPurchaseLine, 'Expense account is required and must belong to the tenant', 400);
+    }
+    const computed = computePurchaseLine({
+      quantity: line.quantity ?? null,
+      unitPrice: line.unit_price ?? null,
+      netAmount: line.net_amount ?? null,
+      taxRate: String(tax.rate),
+      taxType: line.tax_type ?? String(tax.type),
+    });
+    result.push({ input: line, tax, computed, expenseAccountId: String(expenseAccountId) });
+  }
+  return result;
+}
+
+function totalsOf(computed: Array<{ computed: ReturnType<typeof computePurchaseLine> }>): { subtotal: string; taxTotal: string; total: string } {
+  let subtotal = new Decimal(0);
+  let tax = new Decimal(0);
+  for (const item of computed) {
+    subtotal = subtotal.plus(item.computed.net);
+    tax = tax.plus(item.computed.tax);
+  }
+  return { subtotal: subtotal.toFixed(2), taxTotal: tax.toFixed(2), total: subtotal.plus(tax).toFixed(2) };
+}
+
+async function insertPurchaseLines(
+  client: DbClient,
+  tenantId: string,
+  invoiceId: string,
+  rows: Array<{ input: PurchaseLineDraft; tax: any; computed: ReturnType<typeof computePurchaseLine>; expenseAccountId: string }>,
+): Promise<void> {
+  let lineNumber = 1;
+  for (const item of rows) {
+    await client.query(
+      `INSERT INTO purchase_invoice_lines
+         (tenant_id, purchase_invoice_id, line_number, description, quantity, unit, unit_price,
+          net_amount, tax_code_id, tax_rate_snapshot, tax_type_snapshot, reporting_mapping_snapshot,
+          tax_amount, gross_amount, expense_account_id, cost_center)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      [
+        tenantId,
+        invoiceId,
+        lineNumber,
+        String(item.input.description).trim(),
+        item.input.quantity ?? '1',
+        item.input.unit ?? '',
+        item.input.unit_price ?? '0',
+        item.computed.net,
+        item.tax.id,
+        String(item.tax.rate),
+        item.input.tax_type ?? String(item.tax.type),
+        item.tax.reporting_mapping ? String(item.tax.reporting_mapping) : null,
+        item.computed.tax,
+        item.computed.gross,
+        item.expenseAccountId,
+        item.input.cost_center ?? null,
+      ],
+    );
+    lineNumber += 1;
+  }
+}
+
+async function getPurchaseById(client: DbClient, tenantId: string, purchaseId: string): Promise<any> {
+  const result = await client.query(
+    `SELECT pi.*, bp.name AS supplier_name, je.entry_number AS journal_entry_number
+     FROM purchase_invoices pi
+     LEFT JOIN business_parties bp ON bp.id = pi.supplier_id AND bp.tenant_id = pi.tenant_id
+     LEFT JOIN journal_entries je ON je.id = pi.accounting_journal_entry_id
+     WHERE pi.id = $1 AND pi.tenant_id = $2`,
+    [purchaseId, tenantId],
+  );
+  if (!result.rows[0]) throw new AppError(ErrorCodes.purchaseNotFound, 'Purchase invoice not found', 404);
+  const lines = await client.query(
+    `SELECT * FROM purchase_invoice_lines
+     WHERE purchase_invoice_id = $1 AND tenant_id = $2 ORDER BY line_number`,
+    [purchaseId, tenantId],
+  );
+  const approvals = await client.query(
+    `SELECT pa.*, u.email AS actor_email
+     FROM purchase_invoice_approvals pa
+     LEFT JOIN users u ON u.id = pa.actor_id
+     WHERE pa.purchase_invoice_id = $1 AND pa.tenant_id = $2 ORDER BY pa.created_at`,
+    [purchaseId, tenantId],
+  );
+  return {
+    ...normalizeRow(result.rows[0]),
+    lines: lines.rows.map(normalizeRow),
+    approvals: approvals.rows,
+  };
+}
+
+async function lockPurchase(client: DbClient, tenantId: string, purchaseId: string): Promise<any> {
+  const result = await client.query(
+    'SELECT * FROM purchase_invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE',
+    [purchaseId, tenantId],
+  );
+  if (!result.rows[0]) throw new AppError(ErrorCodes.purchaseNotFound, 'Purchase invoice not found', 404);
+  return result.rows[0];
+}
+
+async function recordApproval(
+  client: DbClient,
+  tenantId: string,
+  purchaseId: string,
+  action: string,
+  actorId: string | null,
+  reason = '',
+): Promise<void> {
+  await client.query(
+    `INSERT INTO purchase_invoice_approvals (tenant_id, purchase_invoice_id, action, actor_id, reason)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [tenantId, purchaseId, action, actorId, reason],
+  );
+}
+
+async function findDuplicate(
+  client: DbClient,
+  tenantId: string,
+  supplierId: string,
+  normalizedNumber: string,
+  invoiceDate: string,
+): Promise<any> {
+  if (!supplierId || !normalizedNumber) return null;
+  const result = await client.query(
+    `SELECT id, status, total, invoice_date FROM purchase_invoices
+     WHERE tenant_id = $1 AND supplier_id = $2 AND supplier_invoice_number_normalized = $3
+       AND invoice_date = $4::date AND status NOT IN ('REJECTED','CANCELLED_DRAFT','CORRECTED')
+     LIMIT 1`,
+    [tenantId, supplierId, normalizedNumber, invoiceDate],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function matchSupplier(
+  client: DbClient,
+  tenantId: string,
+  canonical: CanonicalPurchaseInvoice,
+): Promise<{ supplierId: string | null; reason: string | null; ambiguous: boolean }> {
+  const supplier = canonical.supplier;
+  const signals: Array<{ value: string | null; reason: string }> = [
+    { value: supplier.businessId, reason: 'MATCH_BUSINESS_ID' },
+    { value: supplier.vatId, reason: 'MATCH_VAT_ID' },
+    { value: supplier.eInvoiceAddress, reason: 'MATCH_EINVOICE_ADDRESS' },
+    { value: supplier.iban, reason: 'MATCH_IBAN' },
+    { value: supplier.name, reason: 'MATCH_NAME' },
+  ];
+  const candidates = new Set<string>();
+  const reasons = new Map<string, string>();
+  for (const signal of signals) {
+    if (!signal.value) continue;
+    const value = signal.value.trim().toUpperCase();
+    const result = await client.query(
+      `SELECT id FROM business_parties
+       WHERE tenant_id = $1 AND is_supplier AND is_active
+         AND (
+           upper(coalesce(business_id,'')) = $2
+           OR upper(coalesce(vat_id,'')) = $2
+           OR upper(coalesce(e_invoice_address,'')) = $2
+           OR upper(coalesce(iban,'')) = $2
+           OR upper(coalesce(name,'')) = $2
+         )
+       LIMIT 5`,
+      [tenantId, value],
+    );
+    for (const row of result.rows) {
+      candidates.add(String(row.id));
+      if (!reasons.has(String(row.id))) reasons.set(String(row.id), signal.reason);
+    }
+  }
+  if (candidates.size === 1) {
+    const only = [...candidates][0]!;
+    return { supplierId: only, reason: reasons.get(only) ?? null, ambiguous: false };
+  }
+  return { supplierId: null, reason: null, ambiguous: candidates.size > 1 };
+}
+
+// ---------------------------------------------------------------------------
+// Public purchase operations
+// ---------------------------------------------------------------------------
+export async function listPurchases(
+  pool: Db,
+  tenantId: string,
+  filters: {
+    status?: PurchaseStatus;
+    supplierId?: string;
+    from?: string;
+    to?: string;
+    source?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<{ purchases: any[]; total: number }> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const clauses: string[] = [];
+    const values: unknown[] = [tenantId];
+    if (filters.status) {
+      values.push(filters.status);
+      clauses.push(`pi.status = $${values.length}`);
+    }
+    if (filters.supplierId) {
+      values.push(filters.supplierId);
+      clauses.push(`pi.supplier_id = $${values.length}`);
+    }
+    if (filters.from) {
+      values.push(filters.from);
+      clauses.push(`pi.invoice_date >= $${values.length}::date`);
+    }
+    if (filters.to) {
+      values.push(filters.to);
+      clauses.push(`pi.invoice_date <= $${values.length}::date`);
+    }
+    if (filters.source) {
+      values.push(filters.source);
+      clauses.push(`pi.source_type = $${values.length}`);
+    }
+    if (filters.search) {
+      values.push(`%${filters.search}%`);
+      clauses.push(`(pi.supplier_invoice_number ILIKE $${values.length} OR bp.name ILIKE $${values.length})`);
+    }
+    const where = `WHERE pi.tenant_id = $1${clauses.length ? ` AND ${clauses.join(' AND ')}` : ''}`;
+    const total = await client.query(
+      `SELECT count(*)::int AS total FROM purchase_invoices pi
+       LEFT JOIN business_parties bp ON bp.id = pi.supplier_id AND bp.tenant_id = pi.tenant_id
+       ${where}`,
+      values,
+    );
+    const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+    const offset = Math.max(filters.offset ?? 0, 0);
+    const rows = await client.query(
+      `SELECT pi.*, bp.name AS supplier_name
+       FROM purchase_invoices pi
+       LEFT JOIN business_parties bp ON bp.id = pi.supplier_id AND bp.tenant_id = pi.tenant_id
+       ${where}
+       ORDER BY pi.invoice_date DESC NULLS LAST, pi.created_at DESC
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, limit, offset],
+    );
+    return { purchases: rows.rows.map(normalizeRow), total: Number(total.rows[0]?.total ?? 0) };
+  });
+}
+
+export async function getPurchase(pool: Db, tenantId: string, purchaseId: string): Promise<any> {
+  return withTenantTransaction(pool, tenantId, (client) => getPurchaseById(client, tenantId, purchaseId));
+}
+
+export async function createPurchaseInvoiceDraft(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  input: PurchaseDraftInput,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const settings = await ensurePurchaseSettingsRow(client, tenantId);
+    const supplier = await client.query(
+      'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
+      [input.supplier_id, tenantId],
+    );
+    if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+    if (!supplier.rows[0].is_active) throw new AppError(ErrorCodes.supplierInactive, 'Supplier is inactive', 409);
+    const invoiceDate = input.invoice_date;
+    const dueDate = input.due_date ?? invoiceDate;
+    if (dueDate < invoiceDate) throw new AppError(ErrorCodes.invalidDueDate, 'Due date before invoice date', 400);
+    const currency = String(input.currency_code ?? settings.default_currency ?? 'EUR').toUpperCase();
+    await validateCurrency(client, currency);
+    const rows = await validateLines(client, tenantId, invoiceDate, input.lines, settings.default_expense_account_id);
+    const totals = totalsOf(rows);
+    const normalized = normalizeSupplierInvoiceNumber(input.supplier_invoice_number ?? '');
+    if (await findDuplicate(client, tenantId, input.supplier_id, normalized, invoiceDate)) {
+      throw new AppError(ErrorCodes.duplicatePurchase, 'Duplicate supplier invoice', 409);
+    }
+    const inserted = await client.query(
+      `INSERT INTO purchase_invoices
+         (tenant_id, company_id, supplier_id, status, supplier_invoice_number,
+          supplier_invoice_number_normalized, invoice_date, due_date, currency_code,
+          supplier_reference, supplier_iban, source_type, supplier_snapshot, subtotal,
+          tax_total, total, created_by)
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6::date, $7::date, $8, $9, $10, 'MANUAL', $11, $12, $13, $14, $15)
+       RETURNING *`,
+      [
+        tenantId,
+        settings.company_id ?? null,
+        input.supplier_id,
+        input.supplier_invoice_number || null,
+        normalized || null,
+        invoiceDate,
+        dueDate,
+        currency,
+        input.supplier_reference || null,
+        input.supplier_iban || null,
+        JSON.stringify(supplierSnapshot(supplier.rows[0])),
+        totals.subtotal,
+        totals.taxTotal,
+        totals.total,
+        userId,
+      ],
+    );
+    await insertPurchaseLines(client, tenantId, String(inserted.rows[0].id), rows);
+    return getPurchaseById(client, tenantId, String(inserted.rows[0].id));
+  });
+}
+
+export async function updatePurchaseInvoiceDraft(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+  input: PurchaseDraftInput,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const existing = await lockPurchase(client, tenantId, purchaseId);
+    if (!['DRAFT', 'INGESTED', 'NEEDS_REVIEW'].includes(String(existing.status))) {
+      throw new AppError(ErrorCodes.purchaseNotEditable, 'Purchase invoice is not editable', 409);
+    }
+    const settings = await ensurePurchaseSettingsRow(client, tenantId);
+    const supplier = await client.query(
+      'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
+      [input.supplier_id, tenantId],
+    );
+    if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+    const invoiceDate = input.invoice_date;
+    const dueDate = input.due_date ?? invoiceDate;
+    if (dueDate < invoiceDate) throw new AppError(ErrorCodes.invalidDueDate, 'Due date before invoice date', 400);
+    const currency = String(input.currency_code ?? existing.currency_code ?? 'EUR').toUpperCase();
+    await validateCurrency(client, currency);
+    const rows = await validateLines(client, tenantId, invoiceDate, input.lines, settings.default_expense_account_id);
+    const totals = totalsOf(rows);
+    const normalized = normalizeSupplierInvoiceNumber(input.supplier_invoice_number ?? '');
+    await client.query(
+      `UPDATE purchase_invoices
+       SET supplier_id = $3, supplier_invoice_number = $4, supplier_invoice_number_normalized = $5,
+           invoice_date = $6::date, due_date = $7::date, currency_code = $8,
+           supplier_reference = $9, supplier_iban = $10, supplier_snapshot = $11::jsonb,
+           subtotal = $12, tax_total = $13, total = $14, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2`,
+      [
+        purchaseId,
+        tenantId,
+        input.supplier_id,
+        input.supplier_invoice_number || null,
+        normalized || null,
+        invoiceDate,
+        dueDate,
+        currency,
+        input.supplier_reference || null,
+        input.supplier_iban || null,
+        JSON.stringify(supplierSnapshot(supplier.rows[0])),
+        totals.subtotal,
+        totals.taxTotal,
+        totals.total,
+      ],
+    );
+    await client.query('DELETE FROM purchase_invoice_lines WHERE purchase_invoice_id = $1', [purchaseId]);
+    await insertPurchaseLines(client, tenantId, purchaseId, rows);
+    return getPurchaseById(client, tenantId, purchaseId);
+  });
+}
+
+export async function reviewPurchaseInvoice(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+  userId: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const invoice = await lockPurchase(client, tenantId, purchaseId);
+    if (!['INGESTED', 'DRAFT', 'NEEDS_REVIEW'].includes(String(invoice.status))) {
+      throw new AppError(ErrorCodes.purchaseNotEditable, 'Purchase invoice cannot be reviewed from this state', 409);
+    }
+    const lines = await client.query(
+      `SELECT count(*)::int AS count FROM purchase_invoice_lines WHERE purchase_invoice_id = $1`,
+      [purchaseId],
+    );
+    if (Number(lines.rows[0]?.count ?? 0) === 0) {
+      throw new AppError(ErrorCodes.purchaseHasNoLines, 'Purchase invoice has no lines', 400);
+    }
+    const supplier = invoice.supplier_id
+      ? await client.query('SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2', [
+          invoice.supplier_id,
+          tenantId,
+        ])
+      : null;
+    if (!supplier?.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier must be confirmed before review', 400);
+    if (!supplier.rows[0].is_active) throw new AppError(ErrorCodes.supplierInactive, 'Supplier is inactive', 409);
+    const snapshot = JSON.stringify(supplierSnapshot(supplier.rows[0]));
+    await client.query(
+      `UPDATE purchase_invoices
+       SET status = 'READY_FOR_APPROVAL', supplier_snapshot = $3::jsonb,
+           reviewed_by = $4, reviewed_at = now(), updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND status IN ('INGESTED','DRAFT','NEEDS_REVIEW')`,
+      [purchaseId, tenantId, snapshot, userId],
+    );
+    await recordApproval(client, tenantId, purchaseId, 'REVIEWED', userId);
+    return getPurchaseById(client, tenantId, purchaseId);
+  });
+}
+
+export async function rejectPurchaseInvoice(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+  userId: string,
+  reason: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const invoice = await lockPurchase(client, tenantId, purchaseId);
+    if (!['INGESTED', 'DRAFT', 'NEEDS_REVIEW', 'READY_FOR_APPROVAL'].includes(String(invoice.status))) {
+      throw new AppError(ErrorCodes.purchaseNotEditable, 'Invoice cannot be rejected from this state', 409);
+    }
+    await client.query(
+      `UPDATE purchase_invoices SET status = 'REJECTED', updated_at = now()
+       WHERE id = $1 AND tenant_id = $2
+         AND status IN ('INGESTED','DRAFT','NEEDS_REVIEW','READY_FOR_APPROVAL')`,
+      [purchaseId, tenantId],
+    );
+    await recordApproval(client, tenantId, purchaseId, 'REJECTED', userId, reason);
+    return getPurchaseById(client, tenantId, purchaseId);
+  });
+}
+
+export async function approvePurchaseInvoice(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+  userId: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const settings = await ensurePurchaseSettingsRow(client, tenantId);
+    const invoice = await lockPurchase(client, tenantId, purchaseId);
+    if (String(invoice.status) !== 'READY_FOR_APPROVAL') {
+      throw new AppError(ErrorCodes.approvalRequired, 'Invoice must be ready for approval first', 409);
+    }
+    if (settings.require_separate_approver === true && String(invoice.created_by) === userId) {
+      throw new AppError(ErrorCodes.approverNotAllowed, 'Creator cannot approve when separate approver is required', 403);
+    }
+    await client.query(
+      `UPDATE purchase_invoices
+       SET status = 'APPROVED', approved_by = $3, approved_at = now(), updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND status = 'READY_FOR_APPROVAL'`,
+      [purchaseId, tenantId, userId],
+    );
+    await recordApproval(client, tenantId, purchaseId, 'APPROVED', userId);
+    if (settings.auto_post_on_approval === true) {
+      await postApprovedPurchase(client, tenantId, purchaseId, userId);
+    }
+    return getPurchaseById(client, tenantId, purchaseId);
+  });
+}
+
+async function postApprovedPurchase(
+  client: DbClient,
+  tenantId: string,
+  purchaseId: string,
+  userId: string,
+): Promise<void> {
+  const settings = await ensurePurchaseSettingsRow(client, tenantId);
+  const invoice = await lockPurchase(client, tenantId, purchaseId);
+  if (String(invoice.status) !== 'APPROVED') {
+    throw new AppError(ErrorCodes.purchaseNotEditable, 'Only approved purchase invoices can be posted', 409);
+  }
+  const apAccount = settings.accounts_payable_account_id;
+  const inputVatAccount = settings.input_vat_account_id;
+  if (!apAccount) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Accounts payable account is not configured', 409);
+  if (!inputVatAccount) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Input VAT account is not configured', 409);
+
+  const lineRows = await client.query(
+    `SELECT pl.*, tc.code AS tax_code, tc.type AS tax_type, tc.rate AS tax_rate
+     FROM purchase_invoice_lines pl
+     LEFT JOIN tax_codes tc ON tc.id = pl.tax_code_id AND tc.tenant_id = pl.tenant_id
+     WHERE pl.purchase_invoice_id = $1 AND pl.tenant_id = $2
+     ORDER BY pl.line_number`,
+    [purchaseId, tenantId],
+  );
+  if (lineRows.rows.length === 0) throw new AppError(ErrorCodes.purchaseHasNoLines, 'No lines to post', 400);
+
+  const journalLines: Array<{
+    accountId: string;
+    description: string;
+    debit: string;
+    credit: string;
+    taxCodeId: string | null;
+    appliedTaxRate: string | null;
+    taxSnapshot: string | null;
+  }> = [];
+  const expenseGroups = new Map<string, Decimal>();
+  const vatGroups = new Map<string, Decimal>();
+  const reverseInputGroups = new Map<string, Decimal>();
+  const reverseOutputGroups = new Map<string, Decimal>();
+  const apTotal = new Decimal(String(invoice.total ?? '0'));
+
+  for (const line of lineRows.rows) {
+    const net = new Decimal(String(line.net_amount));
+    const expenseKey = String(line.expense_account_id);
+    expenseGroups.set(expenseKey, (expenseGroups.get(expenseKey) ?? new Decimal(0)).plus(net));
+    const taxType = String(line.tax_type_snapshot ?? line.tax_type ?? 'VAT');
+    const rate = String(line.tax_rate_snapshot ?? line.tax_rate ?? '0');
+    if (taxType === 'REVERSE_CHARGE') {
+      const reverseInput = settings.reverse_charge_input_account_id;
+      const reverseOutput = settings.reverse_charge_output_account_id;
+      if (!reverseInput || !reverseOutput) {
+        throw new AppError(ErrorCodes.taxMappingMissing, 'Reverse charge accounts are not configured', 409);
+      }
+      const taxAmount = cents(new Decimal(net).mul(new Decimal(rate)).div(100));
+      const inputKey = String(reverseInput);
+      const outputKey = String(reverseOutput);
+      reverseInputGroups.set(inputKey, (reverseInputGroups.get(inputKey) ?? new Decimal(0)).plus(taxAmount));
+      reverseOutputGroups.set(outputKey, (reverseOutputGroups.get(outputKey) ?? new Decimal(0)).plus(taxAmount));
+    } else {
+      const tax = new Decimal(String(line.tax_amount));
+      if (tax.greaterThan(0)) {
+        const vatKey = `${String(inputVatAccount)}|${String(line.tax_code_id ?? '')}`;
+        vatGroups.set(vatKey, (vatGroups.get(vatKey) ?? new Decimal(0)).plus(tax));
+      }
+    }
+  }
+  const description = `Purchase invoice ${String(invoice.supplier_invoice_number ?? purchaseId)}`;
+  for (const [accountId, amount] of expenseGroups) {
+    journalLines.push({
+      accountId,
+      description,
+      debit: amount.toFixed(2),
+      credit: '0',
+      taxCodeId: null,
+      appliedTaxRate: null,
+      taxSnapshot: null,
+    });
+  }
+  for (const [key, amount] of vatGroups) {
+    const [accountId, taxCodeId] = key.split('|');
+    journalLines.push({
+      accountId: accountId!,
+      description,
+      debit: amount.toFixed(2),
+      credit: '0',
+      taxCodeId: taxCodeId || null,
+      appliedTaxRate: null,
+      taxSnapshot: null,
+    });
+  }
+  for (const [accountId, amount] of reverseInputGroups) {
+    journalLines.push({
+      accountId,
+      description: `${description} (reverse charge input)`,
+      debit: amount.toFixed(2),
+      credit: '0',
+      taxCodeId: null,
+      appliedTaxRate: null,
+      taxSnapshot: null,
+    });
+  }
+  for (const [accountId, amount] of reverseOutputGroups) {
+    journalLines.push({
+      accountId,
+      description: `${description} (reverse charge output)`,
+      debit: '0',
+      credit: amount.toFixed(2),
+      taxCodeId: null,
+      appliedTaxRate: null,
+      taxSnapshot: null,
+    });
+  }
+  journalLines.push({
+    accountId: String(apAccount),
+    description,
+    debit: '0',
+    credit: apTotal.toFixed(2),
+    taxCodeId: null,
+    appliedTaxRate: null,
+    taxSnapshot: null,
+  });
+
+  const entryId = await createJournalDraftInTransaction(client, tenantId, userId, {
+    businessDate: toDateString(invoice.invoice_date ?? today()),
+    description,
+    currencyCode: String(invoice.currency_code ?? 'EUR'),
+    sourceType: 'PURCHASE_INVOICE',
+    sourceId: purchaseId,
+    lines: journalLines,
+  });
+  const entryNumber = await postJournalEntryInTransaction(client, tenantId, entryId, userId);
+  await client.query(
+    `UPDATE purchase_invoices
+     SET status = 'POSTED', accounting_journal_entry_id = $3, posted_by = $4,
+         posted_at = now(), updated_at = now()
+     WHERE id = $1 AND tenant_id = $2 AND status = 'APPROVED'`,
+    [purchaseId, tenantId, entryId, userId],
+  );
+  await recordApproval(client, tenantId, purchaseId, 'POSTED', userId, `journal ${entryNumber}`);
+}
+
+export async function postPurchaseInvoice(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+  userId: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    await postApprovedPurchase(client, tenantId, purchaseId, userId);
+    return getPurchaseById(client, tenantId, purchaseId);
+  });
+}
+
+export async function correctPurchaseInvoice(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+  userId: string,
+  reason: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const invoice = await lockPurchase(client, tenantId, purchaseId);
+    if (String(invoice.status) !== 'POSTED') {
+      throw new AppError(ErrorCodes.purchaseNotEditable, 'Only posted purchase invoices can be corrected', 409);
+    }
+    if (!reason || reason.trim().length < 3) {
+      throw new AppError(ErrorCodes.invalidRequest, 'Correction reason is required', 400);
+    }
+    const originalLines = await client.query(
+      `SELECT account_id, description, debit, credit, tax_code_id FROM journal_lines
+       WHERE journal_entry_id = $1 ORDER BY line_number`,
+      [invoice.accounting_journal_entry_id],
+    );
+    const reversalEntry = await client.query(
+      `INSERT INTO journal_entries
+         (tenant_id, business_date, description, currency_code, source_type, source_id, created_by)
+       VALUES ($1, $2, $3, $4, 'PURCHASE_CORRECTION', $5, $6)
+       RETURNING id`,
+      [
+        tenantId,
+        toDateString(invoice.invoice_date ?? today()),
+        `Purchase correction: ${String(invoice.supplier_invoice_number ?? purchaseId)}`,
+        String(invoice.currency_code ?? 'EUR'),
+        purchaseId,
+        userId,
+      ],
+    );
+    const reversalId = String(reversalEntry.rows[0].id);
+    let lineNumber = 1;
+    for (const line of originalLines.rows) {
+      await client.query(
+        `INSERT INTO journal_lines
+           (tenant_id, journal_entry_id, line_number, account_id, description, debit, credit, currency_code, tax_code_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          tenantId,
+          reversalId,
+          lineNumber,
+          line.account_id,
+          String(line.description),
+          String(line.credit),
+          String(line.debit),
+          String(invoice.currency_code ?? 'EUR'),
+          line.tax_code_id ?? null,
+        ],
+      );
+      lineNumber += 1;
+    }
+    const entryNumber = await postJournalEntryInTransaction(client, tenantId, reversalId, userId);
+    await client.query(
+      `INSERT INTO purchase_invoice_corrections
+         (tenant_id, purchase_invoice_id, reversal_journal_entry_id, reason, created_by)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [tenantId, purchaseId, reversalId, reason.trim(), userId],
+    );
+    await client.query(
+      `UPDATE purchase_invoices SET status = 'CORRECTED', updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND status = 'POSTED'`,
+      [purchaseId, tenantId],
+    );
+    await recordApproval(client, tenantId, purchaseId, 'CORRECTED', userId, reason);
+    return { invoice: await getPurchaseById(client, tenantId, purchaseId), reversal_journal_id: reversalId, entryNumber };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion / canonical import
+// ---------------------------------------------------------------------------
+async function createFromCanonical(
+  client: DbClient,
+  tenantId: string,
+  userId: string,
+  canonical: CanonicalPurchaseInvoice,
+  sourceType: string,
+): Promise<any> {
+  const settings = await ensurePurchaseSettingsRow(client, tenantId);
+  const match = await matchSupplier(client, tenantId, canonical);
+  const existingExternal = await client.query(
+    `SELECT id FROM purchase_invoices
+     WHERE tenant_id = $1 AND source_type = $2 AND source_external_id = $3`,
+    [tenantId, sourceType, canonical.sourceExternalId],
+  );
+  if (existingExternal.rows[0]) {
+    throw new AppError(ErrorCodes.duplicateExternalEvent, 'Duplicate external invoice event', 409);
+  }
+  const supplierId = match.supplierId;
+  const invoiceDate = canonical.invoiceDate || today();
+  const dueDate = canonical.dueDate ?? invoiceDate;
+  const currency = canonical.currency || settings.default_currency || 'EUR';
+  await validateCurrency(client, currency);
+  const normalized = normalizeSupplierInvoiceNumber(canonical.invoiceNumber);
+  if (supplierId && (await findDuplicate(client, tenantId, supplierId, normalized, invoiceDate))) {
+    throw new AppError(ErrorCodes.duplicatePurchase, 'Duplicate supplier invoice', 409);
+  }
+
+  const lines: PurchaseLineDraft[] = canonical.lines.map((line) => ({
+    description: line.description,
+    quantity: line.quantity,
+    unit: line.unit,
+    unit_price: line.unitPrice,
+    net_amount: line.netAmount,
+    tax_code_id: '',
+    tax_rate: line.vatRate,
+    tax_type: line.vatType,
+    tax_amount: line.taxAmount,
+    expense_account_id: '',
+  }));
+  const convertedLines: PurchaseLineDraft[] = [];
+  const taxCodeByRate = new Map<string, string>();
+  for (const line of lines) {
+    const rate = line.tax_rate ?? '0';
+    const taxType = line.tax_type ?? 'VAT';
+    const key = `${rate}|${taxType}`;
+    let taxCodeId = taxCodeByRate.get(key);
+    if (!taxCodeId) {
+      const found = await client.query(
+        `SELECT id FROM tax_codes
+         WHERE tenant_id = $1 AND rate = $2 AND type = $3 AND is_active
+           AND effective_from <= $4::date AND (effective_to IS NULL OR effective_to >= $4::date)
+         ORDER BY effective_from DESC LIMIT 1`,
+        [tenantId, rate, taxType === 'REVERSE_CHARGE' ? 'REVERSE_CHARGE' : 'VAT', invoiceDate],
+      );
+      if (found.rows[0]) {
+        taxCodeId = String(found.rows[0].id);
+        taxCodeByRate.set(key, taxCodeId);
+      }
+    }
+    const expenseAccountId = settings.default_expense_account_id ?? '';
+    convertedLines.push({ ...line, tax_code_id: taxCodeId ?? '', expense_account_id: expenseAccountId });
+  }
+  const validated = await validateLines(client, tenantId, invoiceDate, convertedLines, settings.default_expense_account_id);
+  const totals = totalsOf(validated);
+  const snapshot = supplierId
+    ? await client.query('SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2', [supplierId, tenantId])
+    : null;
+  const inserted = await client.query(
+    `INSERT INTO purchase_invoices
+       (tenant_id, company_id, supplier_id, status, supplier_invoice_number,
+        supplier_invoice_number_normalized, invoice_date, due_date, currency_code,
+        supplier_reference, supplier_iban, source_type, source_external_id,
+        supplier_snapshot, source_total, subtotal, tax_total, total, created_by)
+     VALUES ($1, $2, $3, 'INGESTED', $4, $5, $6::date, $7::date, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+     RETURNING *`,
+    [
+      tenantId,
+      settings.company_id ?? null,
+      supplierId,
+      canonical.invoiceNumber,
+      normalized || null,
+      invoiceDate,
+      dueDate,
+      currency,
+      canonical.supplierReference || null,
+      canonical.supplier.iban || canonical.supplierReference || null,
+      sourceType,
+      canonical.sourceExternalId,
+      snapshot?.rows[0] ? JSON.stringify(supplierSnapshot(snapshot.rows[0])) : '{}',
+      canonical.total ?? null,
+      totals.subtotal,
+      totals.taxTotal,
+      totals.total,
+      userId,
+    ],
+  );
+  const purchaseId = String(inserted.rows[0].id);
+  await insertPurchaseLines(client, tenantId, purchaseId, validated);
+  const extractionFields: Array<[string, string, number | null, string]> = [
+    ['supplier_name', canonical.supplier.name, 1, 'STRUCTURED_XML'],
+    ['invoice_number', canonical.invoiceNumber, 1, 'STRUCTURED_XML'],
+    ['invoice_date', canonical.invoiceDate, 1, 'STRUCTURED_XML'],
+    ['due_date', canonical.dueDate ?? '', 1, 'STRUCTURED_XML'],
+    ['total', canonical.total ?? totals.total, 1, 'STRUCTURED_XML'],
+    ['vat_total', canonical.taxTotal ?? totals.taxTotal, 1, 'STRUCTURED_XML'],
+    ['currency', currency, 1, 'STRUCTURED_XML'],
+    ['supplier_business_id', canonical.supplier.businessId, 1, 'STRUCTURED_XML'],
+    ['supplier_vat_id', canonical.supplier.vatId, 1, 'STRUCTURED_XML'],
+    ['iban', canonical.supplier.iban, 1, 'STRUCTURED_XML'],
+    ['reference', canonical.paymentReference, 1, 'STRUCTURED_XML'],
+  ];
+  for (const [field, value, confidence, source] of extractionFields) {
+    if (!value) continue;
+    await client.query(
+      `INSERT INTO purchase_invoice_extractions
+         (tenant_id, purchase_invoice_id, field_name, value, confidence, source)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tenantId, purchaseId, field, String(value), confidence, source],
+    );
+  }
+  await client.query(
+    `UPDATE purchase_invoices SET status = 'NEEDS_REVIEW', updated_at = now()
+     WHERE id = $1 AND tenant_id = $2 AND status = 'INGESTED'`,
+    [purchaseId, tenantId],
+  );
+  await client.query(
+    `INSERT INTO purchase_imports
+       (tenant_id, source_type, source_external_id, supplier_name, supplier_invoice_number,
+        total, status, purchase_invoice_id)
+     VALUES ($1, $2, $3, $4, $5, $6, 'PROCESSED', $7)
+     ON CONFLICT (tenant_id, source_type, source_external_id) DO UPDATE
+       SET status = 'PROCESSED', purchase_invoice_id = EXCLUDED.purchase_invoice_id, updated_at = now()`,
+    [tenantId, sourceType, canonical.sourceExternalId, canonical.supplier.name, canonical.invoiceNumber, totals.total, purchaseId],
+  );
+  await recordApproval(client, tenantId, purchaseId, 'INGESTED', userId, `source ${sourceType}`);
+  return getPurchaseById(client, tenantId, purchaseId);
+}
+
+export async function importEinvoice(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  input: { format: EinvoiceFormat; content: string; externalId?: string },
+): Promise<{ purchase: any; duplicate: boolean }> {
+  const canonical: CanonicalPurchaseInvoice = parseEinvoice(input.format, input.content);
+  const sourceType = input.format;
+  const sourceExternalId = input.externalId ?? canonical.sourceExternalId ?? `${input.format}:${canonical.invoiceNumber}`;
+  const duplicate = await withTenantTransaction(pool, tenantId, async (client) => {
+    const existing = await client.query(
+      `SELECT id FROM purchase_invoices
+       WHERE tenant_id = $1 AND source_type = $2 AND source_external_id = $3`,
+      [tenantId, sourceType, sourceExternalId],
+    );
+    return existing.rows[0] ? String(existing.rows[0].id) : null;
+  });
+  if (duplicate) {
+    const existing = await getPurchase(pool, tenantId, duplicate);
+    return { purchase: existing, duplicate: true };
+  }
+  try {
+    const purchase = await withTenantTransaction(pool, tenantId, (client) =>
+      createFromCanonical(client, tenantId, userId, { ...canonical, sourceExternalId }, sourceType),
+    );
+    return { purchase, duplicate: false };
+  } catch (error) {
+    const pgError = error as { code?: string };
+    if (pgError.code === '23505') {
+      const existingAfterRace = await withTenantTransaction(pool, tenantId, async (client) => {
+        const rows = await client.query(
+          `SELECT id FROM purchase_invoices
+           WHERE tenant_id = $1 AND source_type = $2 AND source_external_id = $3`,
+          [tenantId, sourceType, sourceExternalId],
+        );
+        return rows.rows[0] ? String(rows.rows[0].id) : null;
+      });
+      if (existingAfterRace) {
+        const existing = await getPurchase(pool, tenantId, existingAfterRace);
+        return { purchase: existing, duplicate: true };
+      }
+      throw new AppError(ErrorCodes.duplicatePurchase, 'Duplicate supplier invoice', 409);
+    }
+    throw error;
+  }
+}
+
+export async function listPurchaseImports(pool: Db, tenantId: string): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query(
+      `SELECT * FROM purchase_imports WHERE tenant_id = $1
+       ORDER BY created_at DESC LIMIT 200`,
+      [tenantId],
+    );
+    return result.rows.map(normalizeRow);
+  });
+}
+
+export async function cancelPurchaseDraft(
+  pool: Db,
+  tenantId: string,
+  purchaseId: string,
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const existing = await lockPurchase(client, tenantId, purchaseId);
+    if (String(existing.status) !== 'DRAFT') {
+      throw new AppError(ErrorCodes.purchaseNotEditable, 'Only drafts can be cancelled', 409);
+    }
+    await client.query(
+      `UPDATE purchase_invoices SET status = 'CANCELLED_DRAFT', updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND status = 'DRAFT'`,
+      [purchaseId, tenantId],
+    );
+    return getPurchaseById(client, tenantId, purchaseId);
+  });
+}
+
+export async function attachPurchaseDocument(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  purchaseId: string,
+  storage: LocalObjectStorageProvider,
+  input: { originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'; data: Buffer; role?: string },
+): Promise<any> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const purchase = await lockPurchase(client, tenantId, purchaseId);
+    if (['POSTED', 'CORRECTED', 'REJECTED', 'CANCELLED_DRAFT'].includes(String(purchase.status))) {
+      throw new AppError(ErrorCodes.purchaseImmutable, 'Documents cannot be attached to a terminal purchase invoice', 409);
+    }
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'] as const;
+    if (!allowedTypes.includes(input.mimeType as any)) {
+      throw new AppError(ErrorCodes.invalidSourceDocument, 'Only PDF, JPEG and PNG are supported', 415);
+    }
+    const existingSource = await client.query(
+      `SELECT id FROM purchase_invoice_documents
+       WHERE tenant_id = $1 AND purchase_invoice_id = $2 AND role = 'SOURCE'`,
+      [tenantId, purchaseId],
+    );
+    const role = existingSource.rows[0] ? 'ATTACHMENT' : (input.role ?? 'SOURCE');
+    // uploadDocument opens its own transaction; do it outside the purchase tx.
+    const document = await uploadDocument(pool, tenantId, userId, storage, {
+      originalFilename: input.originalFilename,
+      mimeType: input.mimeType,
+      data: input.data,
+      documentType: 'PURCHASE_INVOICE',
+    });
+    await client.query(
+      `INSERT INTO purchase_invoice_documents
+         (tenant_id, purchase_invoice_id, document_id, document_version_id, role)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (tenant_id, purchase_invoice_id, document_version_id, role) DO NOTHING`,
+      [tenantId, purchaseId, document.id, document.latest_version_id, role],
+    );
+    return { document, role };
+  });
+}
+
+export async function listPurchaseDocuments(pool: Db, tenantId: string, purchaseId: string): Promise<any[]> {
+  return withTenantTransaction(pool, tenantId, async (client) => {
+    const purchase = await client.query(
+      'SELECT id FROM purchase_invoices WHERE id = $1 AND tenant_id = $2',
+      [purchaseId, tenantId],
+    );
+    if (!purchase.rows[0]) throw new AppError(ErrorCodes.purchaseNotFound, 'Purchase invoice not found', 404);
+    const result = await client.query(
+      `SELECT pid.role, pid.created_at, d.id AS document_id, dv.id AS document_version_id,
+              dv.original_filename, dv.mime_type, dv.sha256, dv.size_bytes
+       FROM purchase_invoice_documents pid
+       JOIN documents d ON d.id = pid.document_id AND d.tenant_id = pid.tenant_id
+       JOIN document_versions dv ON dv.id = pid.document_version_id AND dv.tenant_id = pid.tenant_id
+       WHERE pid.purchase_invoice_id = $1 AND pid.tenant_id = $2
+       ORDER BY pid.created_at`,
+      [purchaseId, tenantId],
+    );
+    return result.rows;
+  });
+}
