@@ -1,5 +1,9 @@
 # Implementatsiooni staatus
 
+## v0.14 Employee Registry
+
+Employee and employment master data are implemented with tenant isolation, lifecycle actions, protected sensitive fields, insurance/payroll-readiness metadata, audit events, API routes and responsive UI. See [`docs/EMPLOYEE_REGISTRY.md`](docs/EMPLOYEE_REGISTRY.md) and the explicit boundary list in [`docs/EMPLOYEE_REGISTRY_GAP.md`](docs/EMPLOYEE_REGISTRY_GAP.md).
+
 ## v0.13 Banking
 
 Banking backend foundation and responsive Banking UI are implemented: account management, CSV/CAMT preview/import, history, transaction filters, detail/reconciliation allocations, deterministic suggestions, classifications, review-no-post, summary and settings mappings. Final automated and integration gate verification remains.

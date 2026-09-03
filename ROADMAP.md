@@ -2,6 +2,12 @@
 
 Kehtiv alates 2026-09-03.
 
+## v0.14 Employee Registry
+
+Employee and employment master data are complete for this release. Payroll
+calculation, income-register submission and holiday accounting remain explicit
+future scope; see `docs/EMPLOYEE_REGISTRY_GAP.md`.
+
 ## Otsus
 
 - **v0.7.5 (Business Registry Integration) jääb viimaseks "vana plaani" punktiks** ja tehakse praegu lõpuni.

@@ -59,6 +59,11 @@ export const TENANT_PERMISSIONS = [
   'banking.match',
   'banking.post',
   'banking.accounts.manage',
+  'employees.read',
+  'employees.create',
+  'employees.update',
+  'employees.manage_sensitive',
+  'employees.terminate',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -130,6 +135,11 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'banking.match',
       'banking.post',
       'banking.accounts.manage',
+      'employees.read',
+      'employees.create',
+      'employees.update',
+      'employees.manage_sensitive',
+      'employees.terminate',
     ],
   },
   {
@@ -176,6 +186,11 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'banking.match',
       'banking.post',
       'banking.accounts.manage',
+      'employees.read',
+      'employees.create',
+      'employees.update',
+      'employees.manage_sensitive',
+      'employees.terminate',
     ],
   },
   {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.14.0] - 2026-09-03
+
+- Added tenant-scoped employee and employment registry with lifecycle actions,
+  sensitive-field permissions, RLS, audit events and responsive UI.
+- Added employee/employment API and explicit payroll-scope gap documentation.
+
 ## [0.12.1] - 2026-09-03 (completion work, uncommitted until gate)
 
 - v0.12 FEATURE GATE: v0.12 browser E2E suite green on desktop/tablet/mobile

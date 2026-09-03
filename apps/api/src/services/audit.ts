@@ -3,6 +3,14 @@ import crypto from 'node:crypto';
 import type { Db, DbClient, Queryable } from '../db/pool';
 
 export type AuditAction =
+  | 'EMPLOYEE.CREATED'
+  | 'EMPLOYEE.UPDATED'
+  | 'EMPLOYEE.TERMINATED'
+  | 'EMPLOYEE.REACTIVATED'
+  | 'EMPLOYEE.SENSITIVE_UPDATED'
+  | 'EMPLOYMENT.CREATED'
+  | 'EMPLOYMENT.UPDATED'
+  | 'EMPLOYMENT.ENDED'
   | 'AUTH.REGISTERED'
   | 'AUTH.EMAIL_VERIFICATION_REQUESTED'
   | 'AUTH.EMAIL_VERIFIED'

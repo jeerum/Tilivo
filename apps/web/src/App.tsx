@@ -16,6 +16,7 @@ import { AccountingPage } from './app/AccountingPage';
 import { SalesPage } from './app/SalesPage';
 import { PurchasesPage } from './app/PurchasesPage';
 import { BankingPage } from './app/BankingPage';
+import { EmployeesPage } from './app/EmployeesPage';
 
 function Protected({ children }: { children: ReactNode }) {
   const { ready, user } = useAuth();
@@ -33,6 +34,7 @@ export default function App() {
       <Route path="/sales" element={<Protected><SalesPage /></Protected>} />
       <Route path="/purchases" element={<Protected><PurchasesPage /></Protected>} />
       <Route path="/banking" element={<Protected><BankingPage /></Protected>} />
+      <Route path="/employees" element={<Protected><EmployeesPage /></Protected>} />
       <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
