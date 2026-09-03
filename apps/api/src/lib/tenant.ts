@@ -207,6 +207,7 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'registry.read',
       'tax.read',
       'purchase.classify',
+      'time.read', 'time.create', 'time.update', 'time.submit',
     ],
   },
   {
