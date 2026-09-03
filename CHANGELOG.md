@@ -12,6 +12,10 @@
   `20260909010000_sales_ledger_payment_update` (20 total).
 - Tests: v0.12 integration 3, browser E2E 15/15 across VAT/Receipts/AI/Sales
   Ledger; full API 198/198 PASS.
+- Production deploy (2026-09-03): backup + restore-verify PASS, code synced,
+  migrations `20260909000000_sales_ledger_v12` +
+  `20260909010000_sales_ledger_payment_update` (18 -> 20), smoke PASS,
+  production Sales Ledger Playwright 3/3 PASS; other services untouched.
 
 ## [0.11.0] - 2026-09-03
 

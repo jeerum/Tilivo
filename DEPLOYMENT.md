@@ -11,7 +11,7 @@ https://tilivo.mrjaak.com
 - Nginx: isoleeritud site `tilivo.mrjaak.com`, proksib `127.0.0.1:3101`; HTTP -> HTTPS.
 - Rakenduse `APP_BASE_URL=https://tilivo.mrjaak.com`.
 
-## Praegune seis (v0.11 AI Expense Classification)
+## Praegune seis (v0.12 Sales Ledger 2.0)
 
 Tilivo on deploy'tud VPS-ile (locoforum) **isoleeritult**, ilma olemasolevaid teenuseid puutumata:
 
@@ -51,7 +51,9 @@ v0.7 lisas migratsiooni `20260904000000_purchases_core`; v0.7.5 lisas
 `20260906000000_vat_engine_v09`; v0.10 lisab
 `20260907000000_purchases_receipts_v10` ja
 `20260907010000_purchase_merchant_review`; v0.11 lisab
-`20260908000000_ai_classification_v11`. `remote-deploy.sh` teeb kõik
+`20260908000000_ai_classification_v11`; v0.12 lisab
+`20260909000000_sales_ledger_v12` ja
+`20260909010000_sales_ledger_payment_update`. `remote-deploy.sh` teeb kõik
 automaatselt:
 
 ```text

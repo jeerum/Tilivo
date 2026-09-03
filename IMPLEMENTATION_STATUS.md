@@ -426,6 +426,12 @@ Production v0.4 backup copy -> migrate -> data preservation: PASS
     kood sünkroniseeritud, `remote-deploy.sh` PASS, migratsioon ainult
     `20260908000000_ai_classification_v11` (17 -> 18), production AI
     Playwright 3/3 PASS; teised serveriteenused puutumata.
+  - v0.12 deployed production (2026-09-03): backup + restore-verify PASS,
+    kood sünkroniseeritud, `remote-deploy.sh` PASS, migratsioonid
+    `20260909000000_sales_ledger_v12` +
+    `20260909010000_sales_ledger_payment_update` (18 -> 20),
+    production Sales Ledger Playwright 3/3 PASS; teised serveriteenused
+    puutumata.
 - Production test tenant cleanup complete; QA tenants (Tilivo QA Tenant,
   E2E Switch Tenant, E2E Accounting QA Tenant) are intentional fixtures.
 
