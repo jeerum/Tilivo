@@ -14,6 +14,10 @@
 - Migration `20260908000000_ai_classification_v11` (18 total).
 - Tests: v0.11 unit 5, integration 4, browser E2E 12/12
   (VAT + Receipts + AI, desktop/tablet/mobile); full API 195/195 PASS.
+- Production deploy (2026-09-03): backup + restore-verify PASS, code
+  synced to `/opt/tilivo`, `remote-deploy.sh` PASS, migration only
+  `20260908000000_ai_classification_v11` (17 -> 18), production AI
+  Playwright 3/3 PASS; other host services untouched.
 
 ## [0.10.0] - 2026-09-03
 
