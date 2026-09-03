@@ -1718,6 +1718,11 @@ ja vähem:
 
 ## 70. Arendusjärjekord – parandatud
 
+> **Uuendatud 2026-09-03:** v0.1–v0.7 on ehitatud vastavalt allolevale tabelile. Alates **v0.7.5**
+> (Business Registry Integration) kehtib uus plaan – vt [`ROADMAP.md`](ROADMAP.md). v0.7.5 jääb viimaseks
+> "vana plaani" punktiks; alates v0.8 ehitatakse täisväärtuslikku Soome raamatupidamistarkvara (Accounting/ERP),
+> mitte lihtsalt arvete programmi. Allolev tabel jääb ajalooliseks plaaniks.
+
 | Versioon | Sisu |
 |---|---|
 | **v0.1** | Infrastructure, repo, CI/CD, DEV/STAGING/PROD, PostgreSQL, API v1, secrets, jobs, monitoring, backup |

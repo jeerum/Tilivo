@@ -1,9 +1,16 @@
 # Tilivo
 
-Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on **v0.3 Multi-Tenant + RLS** vastavalt
-`raamatupidamise_saas_ARCHITECTURE_v2.md` plaanile. Ärireeglid, arveldamine, pank jne tulevad hilisemates
-versioonides. v0.2 lisas identity/2FA; v0.3 lisab tenants, companies, memberships, rollid/permissionid ja
-PostgreSQL Row Level Security.
+Raamatupidamise SaaS – modulaarne monoliit. Repo hetkeseis on
+**v0.9 (VAT / ALV Engine) – COMPLETE / GATE PASS**; täpne staatus:
+[`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md). Alates **v0.7.5** kehtib uus plaan
+[`ROADMAP.md`](ROADMAP.md): v0.7.5 (Business Registry) on viimane "vana plaani" punkt, seejärel ehitatakse
+täisväärtuslikku Soome raamatupidamistarkvara (Accounting/ERP), mitte enam lihtsalt arvete programmi.
+
+Varasemad verstapostid: v0.1 infrastruktuur, v0.2 Identity/2FA, v0.3 tenants/companies/memberships/rollid +
+PostgreSQL Row Level Security, v0.4 desktop AppShell + audit + dokumendid, v0.5 Accounting Core, v0.6 Sales,
+v0.7 Purchases + e-arve foundation, v0.7.5 Business Registry integration (PRH YTJ Soome äriregistri otsing
+kliendi/tarnija voogudesse), v0.8 Accounting Core 1 (opening balances,
+dimensioonivalmidus, source-traceability, reversali linkid, konto aktiivsus).
 
 ## Avalik kasutus
 
@@ -60,7 +67,7 @@ POST /api/v1/auth/2fa/recovery-codes
 
 Turvamudel on kirjeldatud [`docs/IDENTITY_SECURITY.md`](docs/IDENTITY_SECURITY.md).
 
-## Accounting API (v0.5)
+## Accounting API (v0.5 + v0.8)
 
 ```text
 GET/POST   /api/v1/accounts
@@ -70,6 +77,7 @@ PATCH/POST /api/v1/accounting-periods/:id | /:id/reopen
 GET/POST   /api/v1/journals
 GET        /api/v1/journals/:id
 POST       /api/v1/journals/:id/post | /:id/reverse
+POST       /api/v1/opening-balances
 GET        /api/v1/ledger
 GET        /api/v1/accounts/:id/ledger
 GET        /api/v1/reports/trial-balance
@@ -81,6 +89,18 @@ GET        /api/v1/currencies
 
 Ülevaade: [`docs/ACCOUNTING_CORE.md`](docs/ACCOUNTING_CORE.md) ja ADR-id
 `docs/decisions/ADR-0010..0015`.
+
+## Business Registry API (v0.7.5)
+
+```text
+GET /api/v1/business-registry/search?q=<nimi või Y-tunnus>
+GET /api/v1/business-registry/companies/:businessId
+```
+
+Provider: PRH YTJ open data v3 (Soome äriregistri avalik andmeallikas, tasuta, API-võtit ei ole).
+Kliendi/tarnija vormides on registriotsing assistent – andmed täidetakse vormile ja kasutaja kinnitab need
+enne salvestamist; registriinfo (source, source_id, fetched_at, snapshot) säilitatakse party küljes.
+Üksikasjad, kaardistus ja limiidid: [`docs/BUSINESS_REGISTRY.md`](docs/BUSINESS_REGISTRY.md).
 
 ## Kohalik arendus
 

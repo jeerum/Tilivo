@@ -18,15 +18,19 @@ import { documentRoutes } from './routes/documents';
 import { accountingRoutes } from './routes/accounting';
 import { salesRoutes } from './routes/sales';
 import { purchaseRoutes } from './routes/purchases';
+import { businessRegistryRoutes } from './routes/businessRegistry';
 import { createEmailProvider } from './services/emailProvider';
 import { findSessionByToken } from './services/sessionService';
 import { hashToken } from './lib/security';
 import { LocalObjectStorageProvider } from './services/documentStorage';
+import type { BusinessRegistryProvider } from './services/businessRegistryProvider';
+import { createPrhYtjRegistryProvider } from './services/prhYtjRegistryProvider';
 
 export interface BuildAppOptions {
   config: AppConfig;
   db: Db;
   loggerStream?: Writable;
+  registryProvider?: BusinessRegistryProvider;
 }
 
 function makeLoggerOptions(config: AppConfig, loggerStream?: Writable): FastifyServerOptions['logger'] {
@@ -46,7 +50,8 @@ function makeLoggerOptions(config: AppConfig, loggerStream?: Writable): FastifyS
   };
 }
 
-export async function buildApp({ config, db, loggerStream }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
+  const { config, db, loggerStream, registryProvider } = options;
   const app = Fastify({
     logger: makeLoggerOptions(config, loggerStream),
     requestIdHeader: 'x-trace-id',
@@ -68,7 +73,7 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
   await app.register(rateLimit, {
     global: true,
-    max: 300,
+    max: config.RATE_LIMIT_MAX,
     timeWindow: '1 minute',
   });
 
@@ -200,5 +205,10 @@ export async function buildApp({ config, db, loggerStream }: BuildAppOptions): P
   await app.register(accountingRoutes, { db, config });
   await app.register(salesRoutes, { db, config, storage });
   await app.register(purchaseRoutes, { db, config, storage });
+  await app.register(businessRegistryRoutes, {
+    db,
+    config,
+    provider: registryProvider ?? createPrhYtjRegistryProvider(config),
+  });
   return app;
 }

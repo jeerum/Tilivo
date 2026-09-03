@@ -16,6 +16,8 @@ import {
   listFxRates,
   listJournals,
   listTaxCodes,
+  listTaxCodesActive,
+  postOpeningBalances,
   postJournal,
   reopenPeriod,
   reverseJournal,
@@ -23,6 +25,7 @@ import {
   trialBalance,
   updateFxRate,
   updateTaxCode,
+  vatSummary,
 } from '../services/accountingService';
 import { resolveSessionUser } from '../services/sessionContext';
 import { requirePermission, resolveTenantAccess, withTenantTransaction } from '../services/tenantService';
@@ -41,6 +44,25 @@ const taxCodeCreateSchema = z.object({
   country_code: z.string().trim().length(2).transform(up),
   rate: rateNumber.min(0).max(9999.9999),
   type: z.string().trim().min(1).max(40).default('VAT'),
+  direction: z.enum(['SALES', 'PURCHASE', 'BOTH']).default('BOTH'),
+  treatment: z
+    .enum([
+      'STANDARD', 'REDUCED', 'ZERO_RATED', 'EXEMPT',
+      'EU_GOODS_SUPPLY', 'EU_GOODS_ACQUISITION',
+      'EU_SERVICE_SUPPLY', 'EU_SERVICE_ACQUISITION',
+      'EXPORT', 'IMPORT', 'REVERSE_CHARGE',
+      'CONSTRUCTION_REVERSE_CHARGE', 'OWN_USE',
+    ])
+    .optional(),
+  reverse_charge: z.boolean().optional(),
+  intra_eu: z.boolean().optional(),
+  is_export: z.boolean().optional(),
+  is_import: z.boolean().optional(),
+  deductible_percent: rateNumber.min(0).max(100).optional(),
+  legal_notes: z
+    .record(z.string().trim().max(600))
+    .refine((value) => Object.keys(value).length <= 5, 'Too many legal note languages')
+    .optional(),
   effective_from: dateString,
   effective_to: dateString.nullable().optional(),
   reporting_mapping: z.string().trim().max(200).nullable().optional(),
@@ -56,6 +78,24 @@ const fxRateSchema = z.object({
   source: z.string().trim().min(1).max(20).default('MANUAL'),
 });
 const fxRatePatchSchema = fxRateSchema.partial();
+const openingBalanceSchema = z.object({
+  business_date: dateString,
+  description: z.string().trim().max(500).optional(),
+  note: z.string().trim().max(500).nullable().optional(),
+  lines: z
+    .array(
+      z.object({
+        account_id: z.string().regex(UUID, 'Invalid account id'),
+        debit: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid debit'),
+        credit: z.string().regex(/^\d+(\.\d+)?$/, 'Invalid credit'),
+        description: z.string().trim().max(500).nullable().optional(),
+        cost_center: z.string().trim().max(120).nullable().optional(),
+        project_code: z.string().trim().max(120).nullable().optional(),
+      }),
+    )
+    .min(2)
+    .max(500),
+});
 
 interface AccountingRouteOptions {
   db: Db;
@@ -115,6 +155,63 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     return reply.code(201).send({ account: result.rows[0] });
   });
 
+  app.patch<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    '/api/v1/accounts/:id',
+    async (request) => {
+      const { userId, tenantId } = await context(request, db, config);
+      await requirePermission(db, userId, tenantId, 'chart.manage');
+      const id = String(request.params.id).toLowerCase();
+      if (!UUID.test(id)) throw new AppError(ErrorCodes.invalidRequest, 'Invalid account id', 400);
+      const body = request.body ?? {};
+      const sets: string[] = [];
+      const values: unknown[] = [id, tenantId];
+      const setValue = (column: string, value: unknown) => {
+        values.push(value);
+        sets.push(`${column} = $${values.length}`);
+      };
+      const name = body.name;
+      if (name !== undefined) {
+        const trimmed = String(name).trim();
+        if (!trimmed) throw new AppError(ErrorCodes.invalidRequest, 'Account name is required', 400);
+        setValue('name', trimmed);
+      }
+      const type = body.type;
+      if (type !== undefined) {
+        const accountType = String(type).toUpperCase();
+        if (!['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'].includes(accountType)) {
+          throw new AppError(ErrorCodes.invalidRequest, 'Invalid account type', 400);
+        }
+        setValue('type', accountType);
+        setValue('normal_balance', ['ASSET', 'EXPENSE'].includes(accountType) ? 'DEBIT' : 'CREDIT');
+      }
+      if (body.is_active !== undefined) {
+        if (typeof body.is_active !== 'boolean') {
+          throw new AppError(ErrorCodes.invalidRequest, 'is_active must be a boolean', 400);
+        }
+        setValue('is_active', body.is_active);
+      }
+      if (sets.length === 0) throw new AppError(ErrorCodes.invalidRequest, 'No account fields to update', 400);
+      sets.push('updated_at = now()');
+      const result = await withTenantTransaction(db, tenantId, (client) =>
+        client.query(
+          `UPDATE accounts SET ${sets.join(', ')}
+           WHERE id = $1 AND tenant_id = $2
+           RETURNING id, code, name, type, normal_balance, is_active`,
+          values,
+        ),
+      );
+      if (!result.rows[0]) throw new AppError(ErrorCodes.accountNotFound, 'Account not found', 404);
+      await writeAuditEvent(db, 'ACCOUNT.UPDATED', request, {
+        userId,
+        tenantId,
+        objectType: 'account',
+        objectId: id,
+        metadata: { code: String(result.rows[0]!.code) },
+      });
+      return { account: result.rows[0] };
+    },
+  );
+
   app.post<{ Body: Record<string, unknown> }>('/api/v1/fiscal-years', async (request, reply) => {
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'chart.manage');
@@ -164,9 +261,21 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'journal.create');
     const body = request.body ?? {};
+    const businessDate = String(body.business_date ?? '');
+    if (!DATE_RE.test(businessDate)) throw new AppError(ErrorCodes.invalidRequest, 'Invalid business date', 400);
+    if (
+      body.document_date !== undefined &&
+      body.document_date !== null &&
+      !DATE_RE.test(String(body.document_date))
+    ) {
+      throw new AppError(ErrorCodes.invalidRequest, 'Invalid document date', 400);
+    }
     const lines = (body.lines ?? []) as Array<Record<string, unknown>>;
     const id = await createJournalDraft(db, tenantId, userId, {
-      businessDate: String(body.business_date),
+      businessDate,
+      documentDate: body.document_date === undefined || body.document_date === null
+        ? null
+        : String(body.document_date),
       description: String(body.description ?? ''),
       currencyCode: String(body.currency_code ?? 'EUR'),
       lines: lines.map((line) => ({
@@ -175,6 +284,8 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
         debit: String(line.debit ?? 0),
         credit: String(line.credit ?? 0),
         taxCodeId: line.tax_code_id === undefined || line.tax_code_id === null ? null : String(line.tax_code_id),
+        costCenter: line.cost_center === undefined || line.cost_center === null ? null : String(line.cost_center),
+        projectCode: line.project_code === undefined || line.project_code === null ? null : String(line.project_code),
       })),
     });
     await writeAuditEvent(db, 'JOURNAL.DRAFT_CREATED', request, {
@@ -187,10 +298,53 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     return reply.code(201).send({ journal_id: id, status: 'DRAFT' });
   });
 
+  app.post<{ Body: Record<string, unknown> }>('/api/v1/opening-balances', async (request, reply) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'journal.create');
+    await requirePermission(db, userId, tenantId, 'journal.post');
+    const parsed = openingBalanceSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw new AppError(ErrorCodes.invalidRequest, 'Invalid opening balance payload', 400, parsed.error.flatten());
+    }
+    const body = parsed.data;
+    const result = await postOpeningBalances(db, tenantId, userId, {
+      businessDate: body.business_date,
+      description: body.description,
+      note: body.note ?? undefined,
+      lines: body.lines.map((line) => ({
+        accountId: line.account_id,
+        debit: line.debit,
+        credit: line.credit,
+        description: line.description ?? null,
+        costCenter: line.cost_center ?? null,
+        projectCode: line.project_code ?? null,
+      })),
+    });
+    await writeAuditEvent(db, 'OPENING_BALANCE.POSTED', request, {
+      userId,
+      tenantId,
+      objectType: 'journal_entry',
+      objectId: result.entryId,
+      metadata: {
+        business_date: body.business_date,
+        entry_number: result.entryNumber,
+        note: body.note ?? '',
+      },
+    });
+    return reply.code(201).send({ journal_id: result.entryId, entry_number: result.entryNumber });
+  });
+
   app.get('/api/v1/journals', async (request) => {
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'accounting.read');
-    const query = request.query as { status?: string; from?: string; to?: string; limit?: string; offset?: string };
+    const query = request.query as {
+      status?: string;
+      source_type?: string;
+      from?: string;
+      to?: string;
+      limit?: string;
+      offset?: string;
+    };
     const status = query.status ? String(query.status).toUpperCase() : undefined;
     if (status && !['DRAFT', 'POSTED', 'REVERSED'].includes(status)) {
       throw new AppError(ErrorCodes.invalidRequest, 'Invalid journal status filter', 400);
@@ -200,6 +354,7 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
     const result = await listJournals(db, tenantId, {
       status,
+      sourceType: query.source_type ? String(query.source_type).toUpperCase() : undefined,
       from: range.from,
       to: range.to,
       limit,
@@ -224,14 +379,20 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
 
   app.get('/api/v1/tax-codes', async (request) => {
     const { userId, tenantId } = await context(request, db, config);
-    await requirePermission(db, userId, tenantId, 'accounting.read');
-    const taxCodes = await listTaxCodes(db, tenantId);
+    await requirePermission(db, userId, tenantId, 'tax.read');
+    const query = request.query as { current?: string; direction?: string };
+    const direction = query.direction ? String(query.direction).toUpperCase() : undefined;
+    const taxCodes =
+      query.current === 'true'
+        ? await listTaxCodesActive(db, tenantId, { direction })
+        : await listTaxCodes(db, tenantId);
     return { tax_codes: taxCodes };
   });
 
   app.post<{ Body: Record<string, unknown> }>('/api/v1/tax-codes', async (request, reply) => {
     const { userId, tenantId } = await context(request, db, config);
     await requirePermission(db, userId, tenantId, 'chart.manage');
+    await requirePermission(db, userId, tenantId, 'tax.manage');
     const parsed = taxCodeCreateSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       throw new AppError(ErrorCodes.taxCodeInvalid, 'Invalid tax code payload', 400, parsed.error.flatten());
@@ -246,6 +407,14 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
       countryCode: body.country_code,
       rate: String(body.rate),
       type: body.type,
+      direction: body.direction,
+      treatment: body.treatment,
+      reverseCharge: body.reverse_charge,
+      intraEu: body.intra_eu,
+      isExport: body.is_export,
+      isImport: body.is_import,
+      deductiblePercent: body.deductible_percent === undefined ? undefined : String(body.deductible_percent),
+      legalNotes: body.legal_notes,
       effectiveFrom: body.effective_from,
       effectiveTo: body.effective_to,
       reportingMapping: body.reporting_mapping,
@@ -266,6 +435,7 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
     async (request, reply) => {
       const { userId, tenantId } = await context(request, db, config);
       await requirePermission(db, userId, tenantId, 'chart.manage');
+      await requirePermission(db, userId, tenantId, 'tax.manage');
       const parsed = taxCodePatchSchema.safeParse(request.body ?? {});
       if (!parsed.success) {
         throw new AppError(ErrorCodes.taxCodeInvalid, 'Invalid tax code payload', 400, parsed.error.flatten());
@@ -280,14 +450,41 @@ export async function accountingRoutes(app: FastifyInstance, options: Accounting
         countryCode: body.country_code,
         rate: body.rate === undefined ? undefined : String(body.rate),
         type: body.type,
+        direction: body.direction,
+        treatment: body.treatment,
+        reverseCharge: body.reverse_charge,
+        intraEu: body.intra_eu,
+        isExport: body.is_export,
+        isImport: body.is_import,
+        deductiblePercent: body.deductible_percent === undefined ? undefined : String(body.deductible_percent),
+        legalNotes: body.legal_notes,
         effectiveFrom: body.effective_from,
         effectiveTo: body.effective_to,
         reportingMapping: body.reporting_mapping,
         isActive: body.is_active,
       });
+      await writeAuditEvent(db, 'TAX_CODE.UPDATED', request, {
+        userId,
+        tenantId,
+        objectType: 'tax_code',
+        objectId: String(taxCode.id),
+        metadata: { code: String(taxCode.code) },
+      });
       return reply.send({ tax_code: taxCode });
     },
   );
+
+  app.get('/api/v1/vat-summary', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'tax.report.read');
+    const query = request.query as Record<string, unknown>;
+    const range = parseDateRange({
+      from: typeof query.from === 'string' ? query.from : undefined,
+      to: typeof query.to === 'string' ? query.to : undefined,
+    });
+    const summary = await vatSummary(db, tenantId, range);
+    return { summary };
+  });
 
   app.get('/api/v1/fx-rates', async (request) => {
     const { userId, tenantId } = await context(request, db, config);

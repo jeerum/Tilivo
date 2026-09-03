@@ -158,12 +158,15 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     );
     expect(oldTables.rows[0]!.count).toBe(0);
 
-    // Apply all remaining release migrations (v0.5 accounting + v0.6 sales).
+    // Apply all remaining release migrations (v0.5 accounting, v0.6 sales,
+    // v0.7 purchases, v0.7.5 business registry, v0.8 accounting core and
+    // v0.9 VAT engine).
     await runMigrations(withDatabase(adminUrl!, dbName));
     const after = await adminDb.query('SELECT count(*)::int AS count FROM pgmigrations');
     // Release migrations after v0.4: accounting core, hardening, tax
-    // uniqueness, v0.6 sales core and v0.7 purchases core.
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 5);
+    // uniqueness, v0.6 sales core, v0.7 purchases core, v0.7.5 registry,
+    // v0.8 accounting core and v0.9 VAT engine.
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 8);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(
@@ -191,7 +194,7 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
        WHERE table_schema = 'public' AND table_name IN
          ('accounts','fiscal_years','accounting_periods','currencies','tax_codes','fx_rates',
           'journal_sequences','journal_entries','journal_lines','journal_reversals',
-          'business_parties','invoice_number_series','sales_settings','sales_invoices',
+          'business_parties','business_registry_cache','invoice_number_series','sales_settings','sales_invoices',
           'sales_invoice_lines','sales_invoice_credit_links','sales_invoice_pdfs',
           'purchase_invoices','purchase_invoice_lines','purchase_invoice_documents',
           'purchase_invoice_approvals','purchase_invoice_extractions',
@@ -202,6 +205,7 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
       'accounting_periods',
       'accounts',
       'business_parties',
+      'business_registry_cache',
       'currencies',
       'fiscal_years',
       'fx_rates',
@@ -237,10 +241,11 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
                      'invoice.credit','invoice.pdf.retry','sales.settings.manage',
                      'purchase.read','purchase.create','purchase.edit','purchase.review',
                      'purchase.approve','purchase.post','purchase.reject','purchase.correct',
-                     'supplier.manage','purchase.settings.manage','purchase.document.upload')
+                     'supplier.manage','purchase.settings.manage','purchase.document.upload',
+                     'registry.read','tax.read','tax.manage','tax.report.read')
        ORDER BY key`,
     );
-    expect(permissions.rows).toHaveLength(25);
+    expect(permissions.rows).toHaveLength(29);
     const grants = await adminDb.query(
       `SELECT r.name, count(*)::int AS grant_count
        FROM role_permissions rp
@@ -252,16 +257,17 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
                        'invoice.credit','invoice.pdf.retry','sales.settings.manage',
                        'purchase.read','purchase.create','purchase.edit','purchase.review',
                        'purchase.approve','purchase.post','purchase.reject','purchase.correct',
-                       'supplier.manage','purchase.settings.manage','purchase.document.upload')
+                       'supplier.manage','purchase.settings.manage','purchase.document.upload',
+                       'registry.read','tax.read','tax.manage','tax.report.read')
        GROUP BY r.name
        ORDER BY r.name`,
     );
     const grantMap = new Map<string, number>();
     for (const row of grants.rows) grantMap.set(String(row.name), Number(row.grant_count));
-    expect(grantMap.get('Owner')).toBe(25);
-    expect(grantMap.get('Admin')).toBe(25);
-    expect(grantMap.get('Accountant')).toBe(19);
-    expect(grantMap.get('Viewer')).toBe(2);
+    expect(grantMap.get('Owner')).toBe(29);
+    expect(grantMap.get('Admin')).toBe(29);
+    expect(grantMap.get('Accountant')).toBe(22);
+    expect(grantMap.get('Viewer')).toBe(4);
 
     // RLS is active and forced on accounting tables.
     const rls = await adminDb.query(
@@ -297,6 +303,67 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
       expect(Boolean(priv.rows[0]!.upd)).toBe(true);
       expect(Boolean(priv.rows[0]!.del)).toBe(true);
     }
+
+    // v0.7.5 business registry schema survived the upgrade.
+    const registryColumns = await adminDb.query(
+      `SELECT count(*)::int AS count FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'business_parties'
+         AND column_name IN ('registry_source','registry_source_id',
+                             'registry_fetched_at','registry_snapshot')`,
+    );
+    expect(registryColumns.rows[0]!.count).toBe(4);
+    const cachePriv = await adminDb.query(
+      `SELECT has_table_privilege('tilivo_runtime', 'business_registry_cache', 'SELECT') AS sel,
+              has_table_privilege('tilivo_runtime', 'business_registry_cache', 'INSERT') AS ins,
+              has_table_privilege('tilivo_runtime', 'business_registry_cache', 'UPDATE') AS upd`,
+    );
+    expect(Boolean(cachePriv.rows[0]!.sel)).toBe(true);
+    expect(Boolean(cachePriv.rows[0]!.ins)).toBe(true);
+    expect(Boolean(cachePriv.rows[0]!.upd)).toBe(true);
+
+    // v0.8 accounting core additions survived the upgrade.
+    const v08Columns = await adminDb.query(
+      `SELECT table_name, column_name FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND ((table_name = 'journal_entries' AND column_name = 'document_date')
+           OR (table_name = 'journal_lines' AND column_name IN ('cost_center', 'project_code')))
+       ORDER BY table_name, column_name`,
+    );
+    expect(v08Columns.rows).toHaveLength(3);
+    const v09Columns = await adminDb.query(
+      `SELECT table_name, count(*)::int AS count FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND (
+           (table_name = 'tax_codes' AND column_name IN
+             ('direction','treatment','reverse_charge','intra_eu','is_export',
+              'is_import','deductible_percent','legal_notes','is_system'))
+           OR (table_name = 'journal_lines' AND column_name IN
+             ('tax_code_snapshot','tax_treatment_snapshot','taxable_base_snapshot',
+              'tax_amount_snapshot','tax_deductible_snapshot',
+              'tax_nondeductible_snapshot','tax_leg_type',
+              'tax_reporting_classification','tax_legal_note'))
+         )
+       GROUP BY table_name ORDER BY table_name`,
+    );
+    const columnCounts = new Map<string, number>();
+    for (const row of v09Columns.rows) {
+      columnCounts.set(String(row.table_name), Number(row.count));
+    }
+    expect(columnCounts.get('tax_codes')).toBe(9);
+    expect(columnCounts.get('journal_lines')).toBe(9);
+    const v09Seed = await adminDb.query(
+      `SELECT count(*)::int AS count FROM tax_codes
+       WHERE tenant_id = '00000000-0000-4000-8000-000000000001' AND is_system`,
+    );
+    expect(Number(v09Seed.rows[0]!.count)).toBeGreaterThanOrEqual(22);
+    const lineChecks = await adminDb.query(
+      `SELECT conname FROM pg_constraint
+       WHERE conrelid = 'journal_lines'::regclass
+         AND conname IN ('journal_lines_amounts_nonnegative',
+                         'journal_lines_debit_credit_exclusive')
+       ORDER BY conname`,
+    );
+    expect(lineChecks.rows).toHaveLength(2);
 
     // Triggers installed.
     const triggers = await adminDb.query(

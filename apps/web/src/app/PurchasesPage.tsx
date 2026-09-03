@@ -2,6 +2,22 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../auth/api';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
+import {
+  conflictingRegistryFields,
+  registryFormPatch,
+  registryPartyFields,
+  type RegistryCompany,
+} from '../lib/businessRegistry';
+import { centsToMoney } from '../lib/money';
+import {
+  deductibleTaxCents,
+  invoiceTaxCents,
+  lineNetCents,
+  selfAssessedTaxCents,
+  taxRateLabel,
+  type TaxCodeView,
+} from '../lib/tax';
+import { BusinessRegistrySearch } from './BusinessRegistrySearch';
 
 type PurchaseView = 'suppliers' | 'purchases' | 'inbox';
 type PurchaseStatus = 'DRAFT' | 'NEEDS_REVIEW' | 'READY_FOR_APPROVAL' | 'APPROVED' | 'POSTED' | 'REJECTED' | 'CORRECTED';
@@ -12,7 +28,15 @@ interface Supplier {
   business_id: string | null;
   vat_id: string | null;
   email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  postal_code: string | null;
   country_code: string;
+  city: string | null;
+  language: string | null;
+  payment_terms_days: number | null;
+  default_currency: string | null;
   is_active: boolean;
 }
 
@@ -22,9 +46,14 @@ interface PurchaseLine {
   quantity: string;
   unit_price: string;
   net_amount: string;
+  tax_code_id: string | null;
+  tax_code_snapshot: string | null;
   tax_rate_snapshot: string | null;
+  tax_treatment_snapshot: string | null;
   tax_amount: string;
   gross_amount: string;
+  deductible_percent_snapshot: string | null;
+  tax_legal_note: string | null;
 }
 
 interface Purchase {
@@ -66,6 +95,83 @@ const today = (): string => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
 
+interface TaxLineDraft {
+  key: number;
+  description: string;
+  quantity: string;
+  unit_price: string;
+  tax_code_id: string;
+  deductible_percent: string;
+  expense_account_id: string;
+}
+
+function taxLabel(code: TaxCodeView): string {
+  const rate = taxRateLabel(code);
+  return `${code.code}${rate ? ` · ${rate}` : ''}`;
+}
+
+function taxCodeById(codes: TaxCodeView[], id: string): TaxCodeView | undefined {
+  return codes.find((code) => code.id === id);
+}
+
+function lineTaxPreview(line: TaxLineDraft, code: TaxCodeView | undefined) {
+  const net = lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price });
+  const invoiceTax = invoiceTaxCents(net, code);
+  const selfAssessed = selfAssessedTaxCents(net, code);
+  const deductible = deductibleTaxCents(net, code, code?.direction === 'PURCHASE' ? line.deductible_percent : '100');
+  return {
+    net: centsToMoney(net),
+    invoiceTax: centsToMoney(invoiceTax),
+    selfAssessed: centsToMoney(selfAssessed),
+    deductible: centsToMoney(deductible),
+    gross: centsToMoney(net + invoiceTax),
+  };
+}
+
+function breakdownFor(lines: TaxLineDraft[], codes: TaxCodeView[]) {
+  const groups = new Map<string, { code: TaxCodeView; net: number; invoiceTax: number; selfAssessed: number; deductible: number }>();
+  for (const line of lines) {
+    const code = taxCodeById(codes, line.tax_code_id);
+    if (!code || !line.description.trim()) continue;
+    const net = lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price });
+    const invoiceTax = invoiceTaxCents(net, code);
+    const selfAssessed = selfAssessedTaxCents(net, code);
+    const deductible = deductibleTaxCents(net, code, line.deductible_percent);
+    const existing = groups.get(code.id);
+    if (existing) {
+      existing.net += net;
+      existing.invoiceTax += invoiceTax;
+      existing.selfAssessed += selfAssessed;
+      existing.deductible += deductible;
+    } else {
+      groups.set(code.id, { code, net, invoiceTax, selfAssessed, deductible });
+    }
+  }
+  return [...groups.values()].map((group) => ({
+    label: taxLabel(group.code),
+    net: centsToMoney(group.net),
+    invoiceTax: centsToMoney(group.invoiceTax),
+    selfAssessed: centsToMoney(group.selfAssessed),
+    deductible: centsToMoney(group.deductible),
+  }));
+}
+
+const emptySupplierDraft = () => ({
+  name: '',
+  business_id: '',
+  vat_id: '',
+  email: '',
+  phone: '',
+  address_line1: '',
+  address_line2: '',
+  postal_code: '',
+  city: '',
+  country_code: 'FI',
+  language: 'fi',
+  payment_terms_days: '14',
+  default_currency: 'EUR',
+});
+
 export function PurchasesPage() {
   const { t } = useI18n();
   const { csrf } = useAuth();
@@ -77,10 +183,11 @@ export function PurchasesPage() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierSearch, setSupplierSearch] = useState('');
-  const [supplierDraft, setSupplierDraft] = useState({ name: '', business_id: '', vat_id: '', email: '', country_code: 'FI', default_currency: 'EUR' });
+  const [supplierDraft, setSupplierDraft] = useState(emptySupplierDraft);
   const [editingSupplierId, setEditingSupplierId] = useState('');
+  const [registrySelection, setRegistrySelection] = useState<RegistryCompany | null>(null);
 
-  const [taxCodes, setTaxCodes] = useState<Array<{ id: string; code: string; rate: string }>>([]);
+  const [taxCodes, setTaxCodes] = useState<TaxCodeView[]>([]);
   const [accounts, setAccounts] = useState<Array<{ id: string; code: string; name: string }>>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
@@ -91,8 +198,8 @@ export function PurchasesPage() {
   const [importXml, setImportXml] = useState('');
 
   const [lineCounter, setLineCounter] = useState(1);
-  const [lines, setLines] = useState<Array<{ key: number; description: string; quantity: string; unit_price: string; tax_code_id: string; expense_account_id: string }>>([
-    { key: 1, description: '', quantity: '1', unit_price: '', tax_code_id: '', expense_account_id: '' },
+  const [lines, setLines] = useState<TaxLineDraft[]>([
+    { key: 1, description: '', quantity: '1', unit_price: '', tax_code_id: '', deductible_percent: '100', expense_account_id: '' },
   ]);
   const [draftSupplierId, setDraftSupplierId] = useState('');
   const [draftNumber, setDraftNumber] = useState('');
@@ -133,7 +240,7 @@ export function PurchasesPage() {
   const loadTaxAccounts = async () => {
     try {
       const [taxResult, accountsResult] = await Promise.all([
-        api<{ tax_codes: Array<{ id: string; code: string; rate: string }> }>('/api/v1/tax-codes', { headers }),
+        api<{ tax_codes: TaxCodeView[] }>('/api/v1/tax-codes?current=true&direction=PURCHASE', { headers }),
         api<{ accounts: Array<{ id: string; code: string; name: string }> }>('/api/v1/accounts', { headers }),
       ]);
       setTaxCodes(taxResult.tax_codes);
@@ -163,16 +270,57 @@ export function PurchasesPage() {
   const submitSupplier = async (event: FormEvent) => {
     event.preventDefault();
     await run(async () => {
-      const body: Record<string, unknown> = { ...supplierDraft, email: supplierDraft.email || null };
+      const body: Record<string, unknown> = {
+        ...supplierDraft,
+        email: supplierDraft.email || null,
+        phone: supplierDraft.phone || null,
+        address_line1: supplierDraft.address_line1 || null,
+        address_line2: supplierDraft.address_line2 || null,
+        postal_code: supplierDraft.postal_code || null,
+        payment_terms_days: Number(supplierDraft.payment_terms_days),
+      };
+      if (registrySelection && supplierDraft.business_id === registrySelection.business_id) {
+        Object.assign(body, registryPartyFields(registrySelection));
+      }
       if (editingSupplierId) {
         await api(`/api/v1/suppliers/${editingSupplierId}`, { method: 'PATCH', csrf, headers, body });
       } else {
         await api('/api/v1/suppliers', { method: 'POST', csrf, headers, body });
       }
-      setSupplierDraft({ name: '', business_id: '', vat_id: '', email: '', country_code: 'FI', default_currency: 'EUR' });
+      setSupplierDraft(emptySupplierDraft());
       setEditingSupplierId('');
+      setRegistrySelection(null);
       await loadSuppliers();
     }, editingSupplierId ? 'supplierUpdated' : 'supplierCreated');
+  };
+
+  const editSupplier = (supplier: Supplier) => {
+    setEditingSupplierId(supplier.id);
+    setRegistrySelection(null);
+    setSupplierDraft({
+      name: supplier.name,
+      business_id: supplier.business_id ?? '',
+      vat_id: supplier.vat_id ?? '',
+      email: supplier.email ?? '',
+      phone: supplier.phone ?? '',
+      address_line1: supplier.address_line1 ?? '',
+      address_line2: supplier.address_line2 ?? '',
+      postal_code: supplier.postal_code ?? '',
+      city: supplier.city ?? '',
+      country_code: supplier.country_code,
+      language: supplier.language ?? 'fi',
+      payment_terms_days: String(supplier.payment_terms_days ?? 14),
+      default_currency: supplier.default_currency ?? 'EUR',
+    });
+  };
+
+  const applyRegistryCompany = (company: RegistryCompany) => {
+    const incoming = registryFormPatch(company);
+    const conflicts = conflictingRegistryFields(supplierDraft, incoming);
+    if (conflicts.length > 0 && !window.confirm(t('registryOverwriteConfirm'))) return;
+    setSupplierDraft((current) => ({ ...current, ...incoming }));
+    setRegistrySelection(company);
+    setMessage(t('registryApplied'));
   };
 
   const toggleSupplier = async (supplier: Supplier) => {
@@ -196,13 +344,14 @@ export function PurchasesPage() {
             quantity: line.quantity || '1',
             unit_price: line.unit_price || '0',
             tax_code_id: line.tax_code_id,
+            deductible_percent: line.deductible_percent,
             expense_account_id: line.expense_account_id,
           })),
       };
       await api('/api/v1/purchases', { method: 'POST', csrf, headers, body });
       setDraftSupplierId('');
       setDraftNumber('');
-      setLines([{ key: lineCounter + 1, description: '', quantity: '1', unit_price: '', tax_code_id: '', expense_account_id: '' }]);
+      setLines([{ key: lineCounter + 1, description: '', quantity: '1', unit_price: '', tax_code_id: '', deductible_percent: '100', expense_account_id: '' }]);
       await loadPurchases();
     }, 'purchaseDraftCreated');
   };
@@ -243,11 +392,22 @@ export function PurchasesPage() {
 
   const addLine = () => {
     setLineCounter((value) => value + 1);
-    setLines((current) => [...current, { key: lineCounter + 1, description: '', quantity: '1', unit_price: '', tax_code_id: '', expense_account_id: '' }]);
+    setLines((current) => [...current, { key: lineCounter + 1, description: '', quantity: '1', unit_price: '', tax_code_id: '', deductible_percent: '100', expense_account_id: '' }]);
   };
 
-  const updateLine = (key: number, patch: Partial<{ description: string; quantity: string; unit_price: string; tax_code_id: string; expense_account_id: string }>) => {
+  const updateLine = (key: number, patch: Partial<TaxLineDraft>) => {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
+  };
+
+  const changeLineTaxCode = (key: number, taxCodeId: string) => {
+    const code = taxCodeById(taxCodes, taxCodeId);
+    setLines((current) =>
+      current.map((line) =>
+        line.key === key
+          ? { ...line, tax_code_id: taxCodeId, deductible_percent: code?.deductible_percent ?? '100' }
+          : line,
+      ),
+    );
   };
 
   if (!tenantId) {
@@ -288,15 +448,33 @@ export function PurchasesPage() {
         <section data-testid="suppliers-panel">
           <details>
             <summary>{editingSupplierId ? t('editSupplier') : t('addSupplier')}</summary>
+            <BusinessRegistrySearch
+              csrf={csrf}
+              headers={headers}
+              onCompany={applyRegistryCompany}
+            />
             <form className="card form-stack" data-testid="supplier-form" onSubmit={submitSupplier}>
               <label className="field"><span>{t('name')}</span><input value={supplierDraft.name} onChange={(event) => setSupplierDraft({ ...supplierDraft, name: event.target.value })} required /></label>
               <div className="form-row">
                 <label className="field"><span>{t('businessId')}</span><input value={supplierDraft.business_id} onChange={(event) => setSupplierDraft({ ...supplierDraft, business_id: event.target.value })} /></label>
                 <label className="field"><span>VAT ID</span><input value={supplierDraft.vat_id} onChange={(event) => setSupplierDraft({ ...supplierDraft, vat_id: event.target.value })} /></label>
-                <label className="field"><span>{t('email')}</span><input type="email" value={supplierDraft.email} onChange={(event) => setSupplierDraft({ ...supplierDraft, email: event.target.value })} /></label>
+              </div>
+              <div className="form-row">
+                <label className="field"><span>{t('address')}</span><input value={supplierDraft.address_line1} onChange={(event) => setSupplierDraft({ ...supplierDraft, address_line1: event.target.value })} /></label>
+                <label className="field"><span>{t('city')}</span><input value={supplierDraft.city} onChange={(event) => setSupplierDraft({ ...supplierDraft, city: event.target.value })} /></label>
+                <label className="field"><span>{t('postalCode')}</span><input value={supplierDraft.postal_code} onChange={(event) => setSupplierDraft({ ...supplierDraft, postal_code: event.target.value })} /></label>
                 <label className="field"><span>{t('country')}</span><input maxLength={2} value={supplierDraft.country_code} onChange={(event) => setSupplierDraft({ ...supplierDraft, country_code: event.target.value.toUpperCase() })} /></label>
               </div>
+              <div className="form-row">
+                <label className="field"><span>{t('email')}</span><input type="email" value={supplierDraft.email} onChange={(event) => setSupplierDraft({ ...supplierDraft, email: event.target.value })} /></label>
+                <label className="field"><span>{t('phone')}</span><input value={supplierDraft.phone} onChange={(event) => setSupplierDraft({ ...supplierDraft, phone: event.target.value })} /></label>
+                <label className="field"><span>{t('paymentTermsDays')}</span><input type="number" min={0} value={supplierDraft.payment_terms_days} onChange={(event) => setSupplierDraft({ ...supplierDraft, payment_terms_days: event.target.value })} /></label>
+                <label className="field"><span>{t('currency')}</span><input maxLength={3} value={supplierDraft.default_currency} onChange={(event) => setSupplierDraft({ ...supplierDraft, default_currency: event.target.value.toUpperCase() })} /></label>
+              </div>
               <button type="submit" className="primary" data-testid="save-supplier">{t('save')}</button>
+              {editingSupplierId && (
+                <button type="button" onClick={() => { setEditingSupplierId(''); setRegistrySelection(null); setSupplierDraft(emptySupplierDraft()); }}>{t('cancel')}</button>
+              )}
             </form>
           </details>
           <div className="card form-row">
@@ -312,7 +490,7 @@ export function PurchasesPage() {
                   <td>{supplier.email ?? '–'}</td><td>{supplier.country_code}</td>
                   <td>{supplier.is_active ? t('active') : t('inactive')}</td>
                   <td>
-                    <button type="button" onClick={() => { setEditingSupplierId(supplier.id); setSupplierDraft({ name: supplier.name, business_id: supplier.business_id ?? '', vat_id: supplier.vat_id ?? '', email: supplier.email ?? '', country_code: supplier.country_code, default_currency: 'EUR' }); }}>{t('edit')}</button>
+                    <button type="button" onClick={() => editSupplier(supplier)}>{t('edit')}</button>
                     <button type="button" onClick={() => void toggleSupplier(supplier)}>{supplier.is_active ? t('deactivate') : t('activate')}</button>
                   </td>
                 </tr>
@@ -343,10 +521,26 @@ export function PurchasesPage() {
                   <input data-testid={`purchase-line-description-${line.key}`} placeholder={t('description')} value={line.description} onChange={(event) => updateLine(line.key, { description: event.target.value })} />
                   <input type="number" min="0" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: event.target.value })} />
                   <input type="number" min="0" step="0.01" value={line.unit_price} onChange={(event) => updateLine(line.key, { unit_price: event.target.value })} />
-                  <select value={line.tax_code_id} onChange={(event) => updateLine(line.key, { tax_code_id: event.target.value })}>
+                  <select value={line.tax_code_id} onChange={(event) => changeLineTaxCode(line.key, event.target.value)}>
                     <option value="">{t('selectTax')}</option>
-                    {taxCodes.map((code) => <option key={code.id} value={code.id}>{code.code} {Number(code.rate)}%</option>)}
+                    {taxCodes.map((code) => <option key={code.id} value={code.id}>{taxLabel(code)}</option>)}
                   </select>
+                  <select
+                    aria-label={`${t('deductibility')} ${line.key}`}
+                    value={line.deductible_percent}
+                    onChange={(event) => updateLine(line.key, { deductible_percent: event.target.value })}
+                    disabled={!line.tax_code_id}
+                  >
+                    {['100', '75', '50', '25', '0'].map((percent) => (
+                      <option key={percent} value={percent}>{percent}%</option>
+                    ))}
+                  </select>
+                  <span className="tax-preview" data-testid={`purchase-line-tax-preview-${line.key}`}>
+                    {(() => {
+                      const preview = lineTaxPreview(line, taxCodeById(taxCodes, line.tax_code_id));
+                      return `Net ${preview.net} · VAT ${preview.invoiceTax}${preview.selfAssessed !== '0.00' ? ` · self-assessed ${preview.selfAssessed}` : ''} · Gross ${preview.gross}`;
+                    })()}
+                  </span>
                   <select value={line.expense_account_id} onChange={(event) => updateLine(line.key, { expense_account_id: event.target.value })}>
                     <option value="">{t('expenseAccount')}</option>
                     {accounts.map((account) => <option key={account.id} value={account.id}>{account.code} {account.name}</option>)}
@@ -358,6 +552,34 @@ export function PurchasesPage() {
                 <button type="button" onClick={addLine}>+</button>
                 <button type="button" className="primary" data-testid="save-purchase-draft" onClick={() => void saveDraft()}>{t('saveDraft')}</button>
               </div>
+              {(() => {
+                const subtotal = lines.reduce((sum, line) => sum + lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price }), 0);
+                const invoiceTax = lines.reduce((sum, line) => sum + invoiceTaxCents(lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price }), taxCodeById(taxCodes, line.tax_code_id)), 0);
+                const selfAssessed = lines.reduce((sum, line) => sum + selfAssessedTaxCents(lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price }), taxCodeById(taxCodes, line.tax_code_id)), 0);
+                const deductible = lines.reduce((sum, line) => sum + deductibleTaxCents(lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price }), taxCodeById(taxCodes, line.tax_code_id), line.deductible_percent), 0);
+                const breakdown = breakdownFor(lines, taxCodes);
+                return (
+                  <>
+                    <p data-testid="purchase-totals-preview">
+                      {t('subtotal')}: {centsToMoney(subtotal)} | {t('taxTotal')}: {centsToMoney(invoiceTax)} | {t('total')}: {centsToMoney(subtotal + invoiceTax)}
+                      {selfAssessed > 0 ? ` | ${t('selfAssessedVat')}: ${centsToMoney(selfAssessed)} · ${t('inputVat')}: ${centsToMoney(deductible)}` : ''}
+                    </p>
+                    {breakdown.length > 0 && (
+                      <div className="tax-breakdown" data-testid="purchase-tax-breakdown">
+                        <strong>{t('vatBreakdown')}</strong>
+                        <ul>
+                          {breakdown.map((item, index) => (
+                            <li key={index}>
+                              {item.label}: {item.net} → {item.invoiceTax}
+                              {item.selfAssessed !== '0.00' ? ` · self-assessed ${item.selfAssessed} (deductible ${item.deductible})` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </form>
           </details>
           <div className="card form-row">
@@ -399,7 +621,19 @@ export function PurchasesPage() {
               <p>{t('status')}: {t(String(selected.status).toLowerCase() as any)} · {t('supplier')}: {selected.supplier_name ?? '–'} · {selected.currency_code}</p>
               <table className="data-table"><thead><tr><th>{t('description')}</th><th>{t('quantity')}</th><th>{t('unitPrice')}</th><th>{t('taxRate')}</th><th>{t('netAmount')}</th><th>{t('taxAmount')}</th><th>{t('grossAmount')}</th></tr></thead>
                 <tbody>{(selected.lines ?? []).map((line) => (
-                  <tr key={line.id}><td>{line.description}</td><td>{line.quantity}</td><td className="num">{Number(line.unit_price).toFixed(2)}</td><td className="num">{Number(line.tax_rate_snapshot ?? 0)}%</td><td className="num">{Number(line.net_amount).toFixed(2)}</td><td className="num">{Number(line.tax_amount).toFixed(2)}</td><td className="num">{Number(line.gross_amount).toFixed(2)}</td></tr>
+                  <tr key={line.id}>
+                    <td>{line.description}</td>
+                    <td>{line.quantity}</td>
+                    <td className="num">{Number(line.unit_price).toFixed(2)}</td>
+                    <td className="num">
+                      {Number(line.tax_rate_snapshot ?? 0)}%
+                      {line.tax_treatment_snapshot ? ` · ${line.tax_treatment_snapshot}` : ''}
+                      {line.deductible_percent_snapshot ? ` · ${line.deductible_percent_snapshot}%` : ''}
+                    </td>
+                    <td className="num">{Number(line.net_amount).toFixed(2)}</td>
+                    <td className="num">{Number(line.tax_amount).toFixed(2)}</td>
+                    <td className="num">{Number(line.gross_amount).toFixed(2)}</td>
+                  </tr>
                 ))}</tbody>
               </table>
               <p>{t('subtotal')}: {Number(selected.subtotal).toFixed(2)} · {t('taxTotal')}: {Number(selected.tax_total).toFixed(2)} · {t('total')}: <strong>{Number(selected.total).toFixed(2)}</strong></p>

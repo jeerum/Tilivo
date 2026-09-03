@@ -43,6 +43,10 @@ export const TENANT_PERMISSIONS = [
   'supplier.manage',
   'purchase.settings.manage',
   'purchase.document.upload',
+  'registry.read',
+  'tax.read',
+  'tax.manage',
+  'tax.report.read',
 ] as const;
 
 export type TenantPermission = (typeof TENANT_PERMISSIONS)[number];
@@ -98,6 +102,10 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'supplier.manage',
       'purchase.settings.manage',
       'purchase.document.upload',
+      'registry.read',
+      'tax.read',
+      'tax.manage',
+      'tax.report.read',
     ],
   },
   {
@@ -129,15 +137,34 @@ export const BUILTIN_ROLES: BuiltinRoleDefinition[] = [
       'purchase.correct',
       'supplier.manage',
       'purchase.document.upload',
+      'registry.read',
+      'tax.read',
+      'tax.report.read',
     ],
   },
   {
     name: 'Employee',
-    permissions: ['tenant.read', 'company.read', 'document.read', 'sales.read', 'purchase.read'],
+    permissions: [
+      'tenant.read',
+      'company.read',
+      'document.read',
+      'sales.read',
+      'purchase.read',
+      'registry.read',
+      'tax.read',
+    ],
   },
   {
     name: 'Viewer',
-    permissions: ['tenant.read', 'company.read', 'document.read', 'sales.read', 'purchase.read'],
+    permissions: [
+      'tenant.read',
+      'company.read',
+      'document.read',
+      'sales.read',
+      'purchase.read',
+      'registry.read',
+      'tax.read',
+    ],
   },
 ];
 

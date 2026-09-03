@@ -30,6 +30,7 @@ import {
 import { resolveSessionUser } from '../services/sessionContext';
 import { requirePermission, resolveTenantAccess } from '../services/tenantService';
 import { writeAuditEvent } from '../services/audit';
+import { registryCompanySchema } from '../services/businessRegistryTypes';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -57,6 +58,10 @@ const supplierSchema = z.object({
   e_invoice_operator: z.string().trim().max(300).nullable().optional(),
   default_expense_account_id: z.string().regex(UUID_RE).nullable().optional(),
   default_tax_code_id: z.string().regex(UUID_RE).nullable().optional(),
+  registry_source: z.string().trim().max(64).nullable().optional(),
+  registry_source_id: z.string().trim().max(64).nullable().optional(),
+  registry_fetched_at: z.string().datetime({ offset: true }).nullable().optional(),
+  registry_snapshot: registryCompanySchema.nullable().optional(),
 });
 
 const purchaseLineSchema = z.object({
@@ -67,6 +72,7 @@ const purchaseLineSchema = z.object({
   net_amount: decimalString.nullable().optional(),
   tax_code_id: z.string().regex(UUID_RE),
   tax_type: z.string().trim().max(40).nullable().optional(),
+  deductible_percent: decimalString.nullable().optional(),
   expense_account_id: z.string().regex(UUID_RE),
   cost_center: z.string().trim().max(120).nullable().optional(),
 });
@@ -155,6 +161,19 @@ export async function purchaseRoutes(app: FastifyInstance, options: PurchaseRout
       objectId: String(supplier.id),
       metadata: { supplier_id: String(supplier.id), name: String(supplier.name) },
     });
+    if (parsed.data.registry_source_id) {
+      await writeAuditEvent(db, 'SUPPLIER.REGISTRY_IMPORTED', request, {
+        userId,
+        tenantId,
+        objectType: 'business_party',
+        objectId: String(supplier.id),
+        metadata: {
+          supplier_id: String(supplier.id),
+          registry_source: String(parsed.data.registry_source ?? ''),
+          registry_source_id: parsed.data.registry_source_id,
+        },
+      });
+    }
     return reply.code(201).send({ supplier });
   });
 
@@ -182,6 +201,19 @@ export async function purchaseRoutes(app: FastifyInstance, options: PurchaseRout
         objectId: String(supplier.id),
         metadata: { supplier_id: String(supplier.id) },
       });
+      if (parsed.data.registry_source_id) {
+        await writeAuditEvent(db, 'SUPPLIER.REGISTRY_REFRESHED', request, {
+          userId,
+          tenantId,
+          objectType: 'business_party',
+          objectId: String(supplier.id),
+          metadata: {
+            supplier_id: String(supplier.id),
+            registry_source: String(parsed.data.registry_source ?? ''),
+            registry_source_id: parsed.data.registry_source_id,
+          },
+        });
+      }
       return { supplier };
     },
   );

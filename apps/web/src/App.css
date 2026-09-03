@@ -362,6 +362,11 @@ dd {
   border: 1px solid #e2e6ea;
 }
 
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 .data-table th,
 .data-table td {
   text-align: left;
@@ -408,7 +413,7 @@ dd {
 
 .entry-line-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 130px 130px 40px;
+  grid-template-columns: minmax(180px, 1fr) 120px 120px minmax(140px, 1fr) 40px;
   gap: 8px;
   align-items: center;
 }
@@ -488,5 +493,115 @@ details summary {
 @media (min-width: 1280px) {
   .page-content {
     padding: 32px 40px;
+  }
+}
+
+.registry-search {
+  margin-bottom: 16px;
+}
+
+.registry-title {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.registry-hint {
+  margin: 0 0 10px;
+}
+
+.registry-search-form {
+  margin-bottom: 8px;
+}
+
+.registry-query-field {
+  flex: 1 1 260px;
+  max-width: 520px;
+}
+
+.registry-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.registry-result-button {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid #cfd6dc;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.registry-result-button:hover {
+  border-color: #1a5fb4;
+}
+
+.registry-result-name {
+  font-weight: 600;
+}
+
+.registry-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.registry-status-ok {
+  color: #1f7a33;
+  background: #e8f5ec;
+}
+
+.registry-status-warning {
+  color: #9c4a00;
+  background: #fff3e0;
+}
+
+.registry-notice {
+  margin: 6px 0 0;
+}
+
+.tax-preview {
+  align-self: center;
+  font-size: 0.85rem;
+  color: var(--muted, #6b7280);
+  white-space: nowrap;
+}
+
+.tax-breakdown {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.tax-breakdown ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+@media (max-width: 900px) {
+  .tax-preview {
+    white-space: normal;
+  }
+
+  .entry-line-row {
+    grid-template-columns: 1fr;
+  }
+
+  .registry-result-button {
+    align-items: flex-start;
   }
 }

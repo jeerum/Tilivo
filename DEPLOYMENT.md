@@ -11,7 +11,7 @@ https://tilivo.mrjaak.com
 - Nginx: isoleeritud site `tilivo.mrjaak.com`, proksib `127.0.0.1:3101`; HTTP -> HTTPS.
 - Rakenduse `APP_BASE_URL=https://tilivo.mrjaak.com`.
 
-## Praegune seis (v0.7 Purchases)
+## Praegune seis (v0.9 VAT / ALV Engine)
 
 Tilivo on deploy'tud VPS-ile (locoforum) **isoleeritult**, ilma olemasolevaid teenuseid puutumata:
 
@@ -45,8 +45,10 @@ cd /opt/tilivo
 ./deploy/remote-deploy.sh
 ```
 
-v0.6 lisas workerile dokumendimahu; v0.7 lisab migratsiooni
-`20260904000000_purchases_core`. `remote-deploy.sh` teeb kõik automaatselt:
+v0.7 lisas migratsiooni `20260904000000_purchases_core`; v0.7.5 lisas
+`20260905000000_business_registry`; v0.8 lisab
+`20260905010000_accounting_core_v08`; v0.9 lisab
+`20260906000000_vat_engine_v09`. `remote-deploy.sh` teeb kõik automaatselt:
 
 ```text
 db up -> ensure roles -> api/web build+up -> migrate up -> worker up -> smoke

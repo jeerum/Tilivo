@@ -10,6 +10,14 @@ import {
 import { withTenantTransaction } from './tenantService';
 import { createJournalDraftInTransaction, postJournalEntryInTransaction } from './accountingService';
 import { uploadDocument, type LocalObjectStorageProvider } from './documentStorage';
+import type { RegistryCompany } from './businessRegistryTypes';
+import {
+  calculateVat,
+  isTaxDirectionAllowed,
+  legalNoteForLanguage,
+  treatmentFromLegacyType,
+  type TaxCodeLike,
+} from './vatEngineService';
 
 export type PurchaseStatus =
   | 'INGESTED'
@@ -32,6 +40,7 @@ export interface PurchaseLineDraft {
   tax_rate?: string | null;
   tax_type?: string | null;
   tax_amount?: string | null;
+  deductible_percent?: string | null;
   expense_account_id: string;
   cost_center?: string | null;
 }
@@ -67,6 +76,10 @@ export interface SupplierInput {
   e_invoice_operator?: string | null;
   default_expense_account_id?: string | null;
   default_tax_code_id?: string | null;
+  registry_source?: string | null;
+  registry_source_id?: string | null;
+  registry_fetched_at?: string | null;
+  registry_snapshot?: RegistryCompany | null;
 }
 
 export interface PurchaseSettingsPatch {
@@ -201,8 +214,11 @@ export async function createSupplier(
          (tenant_id, name, is_customer, is_supplier, business_id, vat_id, email, phone,
           address_line1, address_line2, postal_code, city, country_code, language,
           payment_terms_days, default_currency, iban, e_invoice_address, e_invoice_operator,
-          default_expense_account_id, default_tax_code_id, is_active)
-       VALUES ($1, $2, false, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, true)
+          default_expense_account_id, default_tax_code_id,
+          registry_source, registry_source_id, registry_fetched_at, registry_snapshot,
+          is_active)
+       VALUES ($1, $2, false, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+               $18, $19, $20, $21, $22, $23, true)
        RETURNING *`,
       [
         tenantId,
@@ -224,6 +240,10 @@ export async function createSupplier(
         input.e_invoice_operator || null,
         input.default_expense_account_id || null,
         input.default_tax_code_id || null,
+        input.registry_source || null,
+        input.registry_source_id || null,
+        input.registry_fetched_at || null,
+        input.registry_snapshot ? JSON.stringify(input.registry_snapshot) : null,
       ],
     );
     return normalizeRow(result.rows[0]);
@@ -269,6 +289,12 @@ export async function updateSupplier(
     if (patch.e_invoice_operator !== undefined) setValue('e_invoice_operator', patch.e_invoice_operator || null);
     if (patch.default_expense_account_id !== undefined) setValue('default_expense_account_id', patch.default_expense_account_id || null);
     if (patch.default_tax_code_id !== undefined) setValue('default_tax_code_id', patch.default_tax_code_id || null);
+    if (patch.registry_source !== undefined) setValue('registry_source', patch.registry_source || null);
+    if (patch.registry_source_id !== undefined) setValue('registry_source_id', patch.registry_source_id || null);
+    if (patch.registry_fetched_at !== undefined) setValue('registry_fetched_at', patch.registry_fetched_at || null);
+    if (patch.registry_snapshot !== undefined) {
+      setValue('registry_snapshot', patch.registry_snapshot ? JSON.stringify(patch.registry_snapshot) : null);
+    }
     if (sets.length === 0) throw new AppError(ErrorCodes.invalidRequest, 'No supplier fields to update', 400);
     sets.push('updated_at = now()');
     const result = await client.query(
@@ -356,7 +382,10 @@ export async function updatePurchaseSettings(
 // ---------------------------------------------------------------------------
 function loadTaxCodesForDate(client: DbClient, tenantId: string, ids: string[], date: string): Promise<Map<string, any>> {
   return client.query(
-    `SELECT id, code, rate, type, reporting_mapping FROM tax_codes
+    `SELECT id, code, name, rate, type, reporting_mapping, is_active,
+            direction, treatment, reverse_charge, intra_eu, is_export, is_import,
+            deductible_percent, legal_notes, is_system
+     FROM tax_codes
      WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND is_active
        AND effective_from <= $3::date AND (effective_to IS NULL OR effective_to >= $3::date)`,
     [tenantId, ids, date],
@@ -371,9 +400,22 @@ export function computePurchaseLine(input: {
   quantity?: string | null;
   unitPrice?: string | null;
   netAmount?: string | null;
-  taxRate: string;
-  taxType: string;
-}): { net: string; tax: string; gross: string } {
+  taxCode: TaxCodeLike;
+  deductiblePercent?: string | null;
+  invoiceLanguage?: string | null;
+}): {
+  net: string;
+  tax: string;
+  gross: string;
+  treatment: string;
+  classification: string;
+  taxCodeSnapshot: string;
+  deductiblePercent: string;
+  taxLegalNote: string;
+  reportableTax: string;
+  expenseAmount: string;
+  payableAmount: string;
+} {
   let net: Decimal;
   if (input.netAmount !== null && input.netAmount !== undefined) {
     net = cents(new Decimal(input.netAmount));
@@ -382,13 +424,29 @@ export function computePurchaseLine(input: {
     const unitPrice = new Decimal(input.unitPrice ?? '0');
     net = cents(quantity.mul(unitPrice));
   }
-  const rate = new Decimal(input.taxRate);
-  const reverse = input.taxType === 'REVERSE_CHARGE';
-  const tax = reverse ? new Decimal(0) : cents(net.mul(rate).div(100));
+  const taxCode = input.taxCode;
+  const treatment = taxCode.treatment ?? treatmentFromLegacyType(String(taxCode.type ?? 'VAT'));
+  const calc = calculateVat({
+    direction: 'PURCHASE',
+    treatment,
+    rate: String(taxCode.rate),
+    netAmount: net,
+    deductiblePercent: input.deductiblePercent ?? taxCode.deductible_percent,
+    legalNotes: taxCode.legal_notes,
+    language: input.invoiceLanguage,
+  });
   return {
     net: net.toFixed(2),
-    tax: tax.toFixed(2),
-    gross: net.plus(tax).toFixed(2),
+    tax: calc.invoiceTaxAmount,
+    gross: calc.grossAmount,
+    treatment,
+    classification: calc.classification,
+    taxCodeSnapshot: String(taxCode.code),
+    deductiblePercent: String(input.deductiblePercent ?? taxCode.deductible_percent ?? '100'),
+    taxLegalNote: calc.legalNote,
+    reportableTax: calc.reportableTaxAmount,
+    expenseAmount: calc.expenseAmount,
+    payableAmount: calc.payableAmount,
   };
 }
 
@@ -437,6 +495,18 @@ async function validateLines(
     }
     const tax = taxMap.get(line.tax_code_id);
     if (!tax) throw new AppError(ErrorCodes.invoiceTaxCodeInvalid, 'Tax code is not active for the invoice date', 400);
+    if (!isTaxDirectionAllowed(String(tax.direction ?? 'BOTH') as any, 'PURCHASE')) {
+      throw new AppError(
+        ErrorCodes.taxCodeDirectionIncompatible,
+        'Tax code is not valid for purchase invoices',
+        400,
+      );
+    }
+    const deductible = line.deductible_percent ?? String(tax.deductible_percent ?? '100');
+    const deductibleDecimal = new Decimal(deductible);
+    if (deductibleDecimal.lessThan(0) || deductibleDecimal.greaterThan(100)) {
+      throw new AppError(ErrorCodes.deductibilityInvalid, 'Deductibility must be between 0 and 100 percent', 400);
+    }
     const expenseAccountId = line.expense_account_id ?? defaultExpenseAccountId;
     if (!expenseAccountId || !accountSet.has(String(expenseAccountId))) {
       throw new AppError(ErrorCodes.invalidPurchaseLine, 'Expense account is required and must belong to the tenant', 400);
@@ -445,8 +515,8 @@ async function validateLines(
       quantity: line.quantity ?? null,
       unitPrice: line.unit_price ?? null,
       netAmount: line.net_amount ?? null,
-      taxRate: String(tax.rate),
-      taxType: line.tax_type ?? String(tax.type),
+      taxCode: tax,
+      deductiblePercent: deductible,
     });
     result.push({ input: line, tax, computed, expenseAccountId: String(expenseAccountId) });
   }
@@ -475,8 +545,9 @@ async function insertPurchaseLines(
       `INSERT INTO purchase_invoice_lines
          (tenant_id, purchase_invoice_id, line_number, description, quantity, unit, unit_price,
           net_amount, tax_code_id, tax_rate_snapshot, tax_type_snapshot, reporting_mapping_snapshot,
-          tax_amount, gross_amount, expense_account_id, cost_center)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+          tax_amount, gross_amount, expense_account_id, cost_center,
+          tax_code_snapshot, tax_treatment_snapshot, deductible_percent_snapshot, tax_legal_note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
       [
         tenantId,
         invoiceId,
@@ -494,6 +565,10 @@ async function insertPurchaseLines(
         item.computed.gross,
         item.expenseAccountId,
         item.input.cost_center ?? null,
+        item.computed.taxCodeSnapshot,
+        item.computed.treatment,
+        item.computed.deductiblePercent,
+        item.computed.taxLegalNote,
       ],
     );
     lineNumber += 1;
@@ -903,7 +978,9 @@ async function postApprovedPurchase(
   if (!inputVatAccount) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Input VAT account is not configured', 409);
 
   const lineRows = await client.query(
-    `SELECT pl.*, tc.code AS tax_code, tc.type AS tax_type, tc.rate AS tax_rate
+    `SELECT pl.*, tc.code AS tax_code, tc.type AS tax_type, tc.rate AS tax_rate,
+            tc.treatment AS tc_treatment, tc.deductible_percent AS tc_deductible,
+            tc.legal_notes AS tc_legal_notes, tc.direction AS tc_direction
      FROM purchase_invoice_lines pl
      LEFT JOIN tax_codes tc ON tc.id = pl.tax_code_id AND tc.tenant_id = pl.tenant_id
      WHERE pl.purchase_invoice_id = $1 AND pl.tenant_id = $2
@@ -912,7 +989,7 @@ async function postApprovedPurchase(
   );
   if (lineRows.rows.length === 0) throw new AppError(ErrorCodes.purchaseHasNoLines, 'No lines to post', 400);
 
-  const journalLines: Array<{
+  interface JournalMeta {
     accountId: string;
     description: string;
     debit: string;
@@ -920,82 +997,171 @@ async function postApprovedPurchase(
     taxCodeId: string | null;
     appliedTaxRate: string | null;
     taxSnapshot: string | null;
-  }> = [];
-  const expenseGroups = new Map<string, Decimal>();
-  const vatGroups = new Map<string, Decimal>();
-  const reverseInputGroups = new Map<string, Decimal>();
-  const reverseOutputGroups = new Map<string, Decimal>();
+    taxCodeSnapshot: string | null;
+    taxTreatmentSnapshot: string | null;
+    taxableBaseSnapshot: string | null;
+    taxAmountSnapshot: string | null;
+    taxDeductibleSnapshot: string | null;
+    taxNondeductibleSnapshot: string | null;
+    taxLegType: string | null;
+    taxReportingClassification: string | null;
+    taxLegalNote: string | null;
+  }
+  const journalLines: JournalMeta[] = [];
+  interface LineMeta {
+    accountId: string;
+    amount: Decimal;
+    base: Decimal;
+    vatLegType: string | null;
+    taxCodeId: string | null;
+    taxCodeSnapshot: string;
+    taxTreatmentSnapshot: string;
+    taxRate: string;
+    taxLegacyType: string;
+    classification: string;
+    taxLegalNote: string;
+    taxDeductible: string;
+    taxNondeductible: string;
+  }
+  const expenseGroups = new Map<string, LineMeta>();
+  const legGroups = new Map<string, LineMeta>();
   const apTotal = new Decimal(String(invoice.total ?? '0'));
+  const reverseInput = settings.reverse_charge_input_account_id;
+  const reverseOutput = settings.reverse_charge_output_account_id;
 
   for (const line of lineRows.rows) {
     const net = new Decimal(String(line.net_amount));
+    const joinedTax = line.tax_code
+      ? {
+          id: String(line.tax_code_id),
+          code: String(line.tax_code),
+          type: String(line.tax_type ?? 'VAT'),
+          rate: String(line.tax_rate),
+          treatment: String(line.tc_treatment ?? 'STANDARD'),
+          deductible_percent: String(line.tc_deductible ?? '100'),
+          legal_notes: line.tc_legal_notes ?? null,
+          direction: String(line.tc_direction ?? 'BOTH'),
+        }
+      : null;
+    const treatment =
+      String(line.tax_treatment_snapshot ?? '') ||
+      (joinedTax ? String(joinedTax.treatment) : treatmentFromLegacyType(String(line.tax_type_snapshot ?? 'VAT')));
+    const rate = String(line.tax_rate_snapshot ?? (joinedTax ? joinedTax.rate : '0'));
+    const deductible = String(line.deductible_percent_snapshot ?? (joinedTax ? joinedTax.deductible_percent : '100'));
+    const taxCodeSnapshot = String(line.tax_code_snapshot ?? (joinedTax ? joinedTax.code : ''));
+    const taxLegacyType = String(line.tax_type_snapshot ?? (joinedTax ? joinedTax.type : 'VAT'));
+    const legalNoteText = line.tax_legal_note
+      ? String(line.tax_legal_note)
+      : legalNoteForLanguage(joinedTax ? joinedTax.legal_notes : null, 'fi');
+    const calc = calculateVat({
+      direction: 'PURCHASE',
+      treatment: treatment as any,
+      rate,
+      netAmount: net,
+      deductiblePercent: deductible,
+      legalNotes: joinedTax ? joinedTax.legal_notes : null,
+      language: 'fi',
+    });
+    const taxCodeId = line.tax_code_id ? String(line.tax_code_id) : null;
+    const meta: Omit<LineMeta, 'accountId' | 'amount' | 'base' | 'vatLegType'> = {
+      taxCodeId,
+      taxCodeSnapshot,
+      taxTreatmentSnapshot: calc.treatment,
+      taxRate: calc.rate,
+      taxLegacyType,
+      classification: calc.classification,
+      taxLegalNote: legalNoteText,
+      taxDeductible: calc.deductibleTax,
+      taxNondeductible: calc.nonDeductibleTax,
+    };
     const expenseKey = String(line.expense_account_id);
-    expenseGroups.set(expenseKey, (expenseGroups.get(expenseKey) ?? new Decimal(0)).plus(net));
-    const taxType = String(line.tax_type_snapshot ?? line.tax_type ?? 'VAT');
-    const rate = String(line.tax_rate_snapshot ?? line.tax_rate ?? '0');
-    if (taxType === 'REVERSE_CHARGE') {
-      const reverseInput = settings.reverse_charge_input_account_id;
-      const reverseOutput = settings.reverse_charge_output_account_id;
-      if (!reverseInput || !reverseOutput) {
-        throw new AppError(ErrorCodes.taxMappingMissing, 'Reverse charge accounts are not configured', 409);
-      }
-      const taxAmount = cents(new Decimal(net).mul(new Decimal(rate)).div(100));
-      const inputKey = String(reverseInput);
-      const outputKey = String(reverseOutput);
-      reverseInputGroups.set(inputKey, (reverseInputGroups.get(inputKey) ?? new Decimal(0)).plus(taxAmount));
-      reverseOutputGroups.set(outputKey, (reverseOutputGroups.get(outputKey) ?? new Decimal(0)).plus(taxAmount));
+    const existingExpense = expenseGroups.get(expenseKey);
+    if (existingExpense) {
+      existingExpense.amount = existingExpense.amount.plus(calc.expenseAmount);
+      existingExpense.base = existingExpense.base.plus(net);
     } else {
-      const tax = new Decimal(String(line.tax_amount));
-      if (tax.greaterThan(0)) {
-        const vatKey = `${String(inputVatAccount)}|${String(line.tax_code_id ?? '')}`;
-        vatGroups.set(vatKey, (vatGroups.get(vatKey) ?? new Decimal(0)).plus(tax));
+      expenseGroups.set(expenseKey, {
+        accountId: expenseKey,
+        amount: new Decimal(calc.expenseAmount),
+        base: net,
+        ...meta,
+        vatLegType: null,
+      });
+    }
+    for (const vatLeg of calc.legs) {
+      let accountId: string | null = null;
+      if (vatLeg.legType === 'INPUT_VAT') accountId = String(inputVatAccount);
+      else if (vatLeg.legType === 'RC_INPUT_VAT') accountId = reverseInput ? String(reverseInput) : null;
+      else if (vatLeg.legType === 'RC_OUTPUT_VAT') accountId = reverseOutput ? String(reverseOutput) : null;
+      if (!accountId) {
+        throw new AppError(
+          ErrorCodes.taxMappingMissing,
+          `${vatLeg.legType} account is not configured`,
+          409,
+        );
+      }
+      const legKey = `${vatLeg.legType}|${accountId}|${String(taxCodeId ?? '')}`;
+      const existingLeg = legGroups.get(legKey);
+      if (existingLeg) {
+        existingLeg.amount = existingLeg.amount.plus(new Decimal(vatLeg.amount));
+        existingLeg.base = existingLeg.base.plus(net);
+      } else {
+        legGroups.set(legKey, {
+          accountId,
+          amount: new Decimal(vatLeg.amount),
+          base: net,
+          ...meta,
+          vatLegType: vatLeg.legType,
+        });
       }
     }
   }
   const description = `Purchase invoice ${String(invoice.supplier_invoice_number ?? purchaseId)}`;
-  for (const [accountId, amount] of expenseGroups) {
+  for (const group of expenseGroups.values()) {
     journalLines.push({
-      accountId,
+      accountId: group.accountId,
       description,
-      debit: amount.toFixed(2),
+      debit: group.amount.toFixed(2),
       credit: '0',
-      taxCodeId: null,
-      appliedTaxRate: null,
-      taxSnapshot: null,
+      taxCodeId: group.taxCodeId,
+      appliedTaxRate: group.taxRate,
+      taxSnapshot: `${group.taxCodeSnapshot}|${group.taxLegacyType}`,
+      taxCodeSnapshot: group.taxCodeSnapshot,
+      taxTreatmentSnapshot: group.taxTreatmentSnapshot,
+      taxableBaseSnapshot: group.base.toFixed(2),
+      taxAmountSnapshot: '0.00',
+      taxDeductibleSnapshot: group.taxDeductible,
+      taxNondeductibleSnapshot: group.taxNondeductible,
+      taxLegType: 'EXPENSE',
+      taxReportingClassification: group.classification,
+      taxLegalNote: group.taxLegalNote,
     });
   }
-  for (const [key, amount] of vatGroups) {
-    const [accountId, taxCodeId] = key.split('|');
+  const orderedLegs = [...legGroups.values()].sort((a, b) =>
+    `${a.vatLegType}|${a.accountId}|${a.taxCodeId ?? ''}`.localeCompare(
+      `${b.vatLegType}|${b.accountId}|${b.taxCodeId ?? ''}`,
+    ),
+  );
+  for (const group of orderedLegs) {
+    const isOutput = group.vatLegType === 'OUTPUT_VAT' || group.vatLegType === 'RC_OUTPUT_VAT';
+    const legType = group.vatLegType ?? 'INPUT_VAT';
     journalLines.push({
-      accountId: accountId!,
-      description,
-      debit: amount.toFixed(2),
-      credit: '0',
-      taxCodeId: taxCodeId || null,
-      appliedTaxRate: null,
-      taxSnapshot: null,
-    });
-  }
-  for (const [accountId, amount] of reverseInputGroups) {
-    journalLines.push({
-      accountId,
-      description: `${description} (reverse charge input)`,
-      debit: amount.toFixed(2),
-      credit: '0',
-      taxCodeId: null,
-      appliedTaxRate: null,
-      taxSnapshot: null,
-    });
-  }
-  for (const [accountId, amount] of reverseOutputGroups) {
-    journalLines.push({
-      accountId,
-      description: `${description} (reverse charge output)`,
-      debit: '0',
-      credit: amount.toFixed(2),
-      taxCodeId: null,
-      appliedTaxRate: null,
-      taxSnapshot: null,
+      accountId: group.accountId,
+      description: `${description} (${legType})`,
+      debit: isOutput ? '0' : group.amount.toFixed(2),
+      credit: isOutput ? group.amount.toFixed(2) : '0',
+      taxCodeId: group.taxCodeId,
+      appliedTaxRate: group.taxRate,
+      taxSnapshot: `${group.taxCodeSnapshot}|${group.taxLegacyType}`,
+      taxCodeSnapshot: group.taxCodeSnapshot,
+      taxTreatmentSnapshot: group.taxTreatmentSnapshot,
+      taxableBaseSnapshot: group.base.toFixed(2),
+      taxAmountSnapshot: group.amount.toFixed(2),
+      taxDeductibleSnapshot: isOutput ? '0.00' : group.amount.toFixed(2),
+      taxNondeductibleSnapshot: group.taxNondeductible,
+      taxLegType: legType,
+      taxReportingClassification: group.classification,
+      taxLegalNote: group.taxLegalNote,
     });
   }
   journalLines.push({
@@ -1006,6 +1172,15 @@ async function postApprovedPurchase(
     taxCodeId: null,
     appliedTaxRate: null,
     taxSnapshot: null,
+    taxCodeSnapshot: null,
+    taxTreatmentSnapshot: null,
+    taxableBaseSnapshot: null,
+    taxAmountSnapshot: null,
+    taxDeductibleSnapshot: null,
+    taxNondeductibleSnapshot: null,
+    taxLegType: null,
+    taxReportingClassification: null,
+    taxLegalNote: null,
   });
 
   const entryId = await createJournalDraftInTransaction(client, tenantId, userId, {
@@ -1055,21 +1230,29 @@ export async function correctPurchaseInvoice(
       throw new AppError(ErrorCodes.invalidRequest, 'Correction reason is required', 400);
     }
     const originalLines = await client.query(
-      `SELECT account_id, description, debit, credit, tax_code_id FROM journal_lines
+      `SELECT account_id, description, debit, credit, tax_code_id, applied_tax_rate,
+              tax_snapshot, tax_code_snapshot, tax_treatment_snapshot,
+              taxable_base_snapshot, tax_amount_snapshot, tax_deductible_snapshot,
+              tax_nondeductible_snapshot, tax_leg_type, tax_reporting_classification,
+              tax_legal_note, cost_center, project_code
+       FROM journal_lines
        WHERE journal_entry_id = $1 ORDER BY line_number`,
       [invoice.accounting_journal_entry_id],
     );
     const reversalEntry = await client.query(
       `INSERT INTO journal_entries
-         (tenant_id, business_date, description, currency_code, source_type, source_id, created_by)
-       VALUES ($1, $2, $3, $4, 'PURCHASE_CORRECTION', $5, $6)
+         (tenant_id, business_date, document_date, description, currency_code, source_type,
+          source_id, reversal_of_entry_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'PURCHASE_CORRECTION', $6, $7, $8)
        RETURNING id`,
       [
         tenantId,
         toDateString(invoice.invoice_date ?? today()),
+        toDateString(invoice.invoice_date ?? today()),
         `Purchase correction: ${String(invoice.supplier_invoice_number ?? purchaseId)}`,
         String(invoice.currency_code ?? 'EUR'),
         purchaseId,
+        invoice.accounting_journal_entry_id ? String(invoice.accounting_journal_entry_id) : null,
         userId,
       ],
     );
@@ -1078,8 +1261,13 @@ export async function correctPurchaseInvoice(
     for (const line of originalLines.rows) {
       await client.query(
         `INSERT INTO journal_lines
-           (tenant_id, journal_entry_id, line_number, account_id, description, debit, credit, currency_code, tax_code_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (tenant_id, journal_entry_id, line_number, account_id, description, debit, credit,
+            currency_code, tax_code_id, applied_tax_rate, tax_snapshot,
+            tax_code_snapshot, tax_treatment_snapshot, taxable_base_snapshot,
+            tax_amount_snapshot, tax_deductible_snapshot, tax_nondeductible_snapshot,
+            tax_leg_type, tax_reporting_classification, tax_legal_note,
+            cost_center, project_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
         [
           tenantId,
           reversalId,
@@ -1090,6 +1278,19 @@ export async function correctPurchaseInvoice(
           String(line.debit),
           String(invoice.currency_code ?? 'EUR'),
           line.tax_code_id ?? null,
+          line.applied_tax_rate ?? null,
+          line.tax_snapshot ?? null,
+          line.tax_code_snapshot ?? null,
+          line.tax_treatment_snapshot ?? null,
+          line.taxable_base_snapshot ?? null,
+          line.tax_amount_snapshot ?? null,
+          line.tax_deductible_snapshot ?? null,
+          line.tax_nondeductible_snapshot ?? null,
+          line.tax_leg_type ?? null,
+          line.tax_reporting_classification ?? null,
+          line.tax_legal_note ?? null,
+          line.cost_center ?? null,
+          line.project_code ?? null,
         ],
       );
       lineNumber += 1;
@@ -1165,7 +1366,12 @@ async function createFromCanonical(
         `SELECT id FROM tax_codes
          WHERE tenant_id = $1 AND rate = $2 AND type = $3 AND is_active
            AND effective_from <= $4::date AND (effective_to IS NULL OR effective_to >= $4::date)
-         ORDER BY effective_from DESC LIMIT 1`,
+         ORDER BY CASE
+           WHEN reporting_mapping = 'DOMESTIC_INPUT_VAT' THEN 0
+           WHEN reporting_mapping = 'REVERSE_CHARGE' THEN 1
+           WHEN reporting_mapping = 'CONSTRUCTION_RC' THEN 2
+           ELSE 3
+         END, effective_from DESC LIMIT 1`,
         [tenantId, rate, taxType === 'REVERSE_CHARGE' ? 'REVERSE_CHARGE' : 'VAT', invoiceDate],
       );
       if (found.rows[0]) {

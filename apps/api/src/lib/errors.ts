@@ -36,6 +36,7 @@ export const ErrorCodes = {
   accountNotFound: 'ACC-001',
   accountInactive: 'ACC-002',
   duplicateAccountCode: 'ACC-003',
+  openingBalanceExists: 'ACC-004',
   periodNotFound: 'PERIOD-001',
   periodClosed: 'PERIOD-002',
   periodSoftClosed: 'PERIOD-003',
@@ -49,6 +50,11 @@ export const ErrorCodes = {
   taxCodeNotFound: 'TAX-001',
   taxCodeInvalid: 'TAX-002',
   taxCodeDuplicate: 'TAX-003',
+  taxCodeImmutable: 'TAX-004',
+  taxCodeDirectionIncompatible: 'TAX-005',
+  taxCodeNotValidOnDate: 'TAX-006',
+  deductibilityInvalid: 'TAX-007',
+  vatSummaryRangeInvalid: 'TAX-008',
   fxRateNotFound: 'FX-001',
   fxRateDuplicate: 'FX-002',
   fxRateInvalid: 'FX-003',
@@ -90,6 +96,11 @@ export const ErrorCodes = {
   missingRequiredField: 'EINV-004',
   extractionUnavailable: 'OCR-001',
   extractionFailed: 'OCR-002',
+  registryInvalidBusinessId: 'REG-001',
+  registryNotFound: 'REG-002',
+  registryUnavailable: 'REG-003',
+  registryRateLimited: 'REG-004',
+  registryDisabled: 'REG-005',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

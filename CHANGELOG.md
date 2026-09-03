@@ -1,5 +1,120 @@
 # Changelog
 
+## [0.9.0] - 2026-09-03
+
+- VAT / ALV engine: semantic tax-code model (`direction`, `treatment`,
+  reverse charge / intra-EU / export / import flags, deductibility,
+  legal-notes templates, `is_system`), effective-date rate history and
+  idempotent Finnish statutory seed (25.5 % / 13.5 % / 10 % / 0 % / exempt /
+  EU / export / import / RC / construction RC).
+- Central `vatEngineService` with deterministic rounding; sales and purchase
+  posting consume engine results through the Accounting Core; journal lines
+  freeze tax metadata (code, treatment, rate, base, tax, deductible split,
+  leg type, reporting classification, legal note).
+- Construction reverse-charge invoices carry the required wording
+  (§ 8 c AVL / Art. 199) and do not create ordinary output VAT.
+- Credit notes / purchase corrections invert VAT; period lock, idempotency
+  and posting immutability preserved.
+- VAT Summary API and UI (ALV kokkuvõte), tax-code admin view, tax.read /
+  tax.manage / tax.report.read permissions and audit TAX_CODE.UPDATED.
+- Sales/purchase UI per-line tax previews, VAT breakdown, deductibility and
+  legal notes; invoice PDF tax summary and legal-note block.
+- Migration `20260906000000_vat_engine_v09` (dev + test); upgrade test
+  extended to v0.9; docs VAT_ENGINE.md + gap analysis.
+- Tests: API 171/171 PASS (0 skipped), web 16/16 PASS,
+  lint/typecheck/build PASS, Playwright VAT browser flows PASS
+  (desktop/tablet/mobile).
+- `V0.9 VAT / ALV ENGINE GATE: PASS`.
+- Production deploy (2026-09-03): backup + restore-verify PASS, code
+  synced to `/opt/tilivo`, `remote-deploy.sh` PASS, migration only
+  `20260906000000_vat_engine_v09` (14 -> 15), VAT Playwright 6/6 PASS
+  against https://tilivo.mrjaak.com; other host services untouched.
+
+## [0.8.0] - 2026-09-03
+
+- Accounting Core 1 audit + completion (vana tuum säilitatud, mitte
+  ümberkirjutatud).
+- Migration `20260905010000_accounting_core_v08`: `document_date`,
+  `journal_lines.cost_center/project_code`, rea CHECK-id, opening-balance
+  unikaalsus, dimensiooniindeksid, reversal-mirror dimensioonidega.
+- Opening balances: `POST /api/v1/opening-balances`, audit
+  `OPENING_BALANCE.POSTED`, duplikaaditõrge ACC-004, UI vaheleht „Algsaldod“.
+- Reversal-linkid (`reversal_of_entry_id`, `JOURNAL_REVERSAL`) ja ostu
+  korrektsiooni sama seos.
+- Kontode aktiivsus: `PATCH /api/v1/accounts/:id` + UI activate/deactivate;
+  mitteaktiivne konto blokeerib postituse.
+- Journal UI: source-veerg, detailvaade, konto filter, kokkuvõtted/vahe,
+  tasakaalustamata drafti Post keelatud, perioodi kinnitused, mobiilne
+  stack/scroll.
+- Tests: API 144/144 PASS (0 skipped, v0.8 integration 7), web 12/12,
+  Playwright accounting-v08 9/9 PASS (desktop/tablet/mobile), lint/typecheck/
+  build PASS.
+- Production deploy (2026-09-03): backup enne; `remote-deploy.sh` PASS;
+  migratsioon ainult `20260905010000_accounting_core_v08` (13 -> 14);
+  production smoke PASS; teised serveriteenused puutumata.
+- `V0.8 ACCOUNTING CORE 1 GATE: PASS` (lokal + production deploy).
+
+## [0.7.5 gate closure] - 2026-09-03
+
+- Migration `20260905000000_business_registry` valideeritud puhtal kohalikul
+  PostgreSQL 17-l (dev + test DB, 13 migratsiooni; andmeid ei kustutatud).
+- Integration tests: kogu API suite 137/137 PASS (fresh test DB),
+  registry integration 9/9 PASS, 0 skipped; upgrade-test täiendatud v0.7.5
+  registry tabeli/veergude/õiguste kontrolliga.
+- Live PRH YTJ v3 smoke PASS: Y-tunnus 0112038-9 (Nokia Oyj), nimeotsing
+  "Nokia" (mitu tulemust), not-found 9999990-9; mapping ühtib test-fixturega.
+- Browser QA: Playwright registry spec 9/9 PASS desktop/tablet/mobile -
+  kliendi/tarnija otsing, autofill, edit-eelsäilitus, overwrite-kinnitus,
+  registry-unavailable fallback käsitsi sisestusega.
+- Audit/persistents QA: CUSTOMER.REGISTRY_IMPORTED/REFRESHED ja
+  SUPPLIER.REGISTRY_IMPORTED logitud; business_parties registry metadata +
+  snapshot salvestatud; cache-tabelis üks kirje korduvate otsingute kohta.
+- Kvaliteedikontroll: lint PASS, typecheck PASS, build PASS.
+- Production deploy (2026-09-03): backup enne; kood sünkroniseeritud
+  `/opt/tilivo`; `remote-deploy.sh` PASS (api/web/worker rebuilt);
+  migratsioon ainult `20260905000000_business_registry` (12 -> 13);
+  production smoke PASS; teised serveriteenused puutumata.
+- `V0.7.5 BUSINESS REGISTRY GATE: PASS`.
+
+## [0.7.5] - 2026-09-03
+
+- Business registry integration (PRH YTJ open data v3, Finland) - reusable
+  `BusinessRegistryProvider` + `BusinessRegistryService` + client-side
+  provider abstraction; ei sõltu konkreetsest riigist.
+- Y-tunnus normaliseerimine/kontrollsumma, VAT-kuju (FI + 8 numbrit) eraldi
+  registreerimisstaatuse infost.
+- API: `GET /api/v1/business-registry/search?q=...` ja
+  `GET /api/v1/business-registry/companies/:businessId`; permission
+  `registry.read` (kõik sisemised rollid).
+- Kliendi/tarnija loomise + muutmise voog: registriotsing nime/Y-tunnuse
+  järgi, mitme tulemuse valik, autofill, ülekirjutamise kinnitus, käsitsi
+  sisestus jääb alati võimalikuks.
+- Provinientsi hoidmine: `business_parties` lisa `registry_source`,
+  `registry_source_id`, `registry_fetched_at`, `registry_snapshot`; audit
+  `CUSTOMER/SUPPLIER.REGISTRY_IMPORTED/REFRESHED`.
+- Cache: `business_registry_cache` (provider/lookup_key, TTL); rakendus-taseme
+  rate limit provideri päringutele; UI debounce; PRH HTTP 429 -> REG-004.
+- Turvalisus/resilients: timeout/DNS/HTTP/malformed kaardistus REG-003,
+  kasutajasõbralikud sõnumid, response-validatsioon Zod-iga, serveripoolne
+  provider (klient ei puutu PRH-i otse).
+- Migration `20260905000000_business_registry.cjs` (andmeid ei kustuta);
+  config env `BUSINESS_REGISTRY_*`.
+- Docs: [`docs/BUSINESS_REGISTRY.md`](docs/BUSINESS_REGISTRY.md), status ja
+  README uuendatud.
+- Tests: business ID unit 5, provider unit 7, service unit 4, integration 9
+  (fake provider, server test DB), frontend helper 3; lint/typecheck/build
+  PASS lokal.
+
+## [Roadmap 2026-09-03] - v0.7.5+ uus plaan
+
+- Lisa [`ROADMAP.md`](ROADMAP.md): v0.7.5 (Business Registry Integration) jääb viimaseks "vana plaani"
+  punktiks; alates v0.8 ehitatakse täisväärtuslikku Soome raamatupidamistarkvara (Accounting/ERP), mitte enam
+  lihtsalt arvete programmi.
+- Kaardistus juba ehitatud v0.4–v0.7 moodulite (dokumendid/audit, Accounting Core, Sales, Purchases) ja uue
+  plaani versioonide vahel.
+- README/IMPLEMENTATION_STATUS/arhitektuuridokument viitavad nüüd uuele ROADMAP.md-le; "Next step" on
+  v0.7.5 Business Registry Integration.
+
 ## [0.7.0] - 2026-09-03
 
 - Supplier kasutab `business_parties` (`is_supplier`) koos

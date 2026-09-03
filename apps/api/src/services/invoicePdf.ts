@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import Decimal from 'decimal.js';
+import { fillLegalNote } from './vatEngineService';
 
 /**
  * Deterministic, browser-free PDF rendering for issued sales invoices.
@@ -272,7 +274,7 @@ export function renderInvoicePdf(invoice: any): Buffer {
   layout.row(columns(headers, widths, [false, true, true, true, true, true], 9).map((run) => ({ ...run, bold: true })));
   layout.line('-'.repeat(92), { size: 9, gap: 11 });
 
-  const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
+  const lines: any[] = Array.isArray(invoice.lines) ? invoice.lines : [];
   const descChars = Math.max(12, Math.floor(widths[0]! / (9 * 0.6)));
   for (const line of lines) {
     const description = text(line.description);
@@ -310,6 +312,53 @@ export function renderInvoicePdf(invoice: any): Buffer {
       { text: money(value), x: amountX, size: 10, bold },
     ]);
   }
+
+  // VAT summary by tax code/rate (snapshot fields, deterministic).
+  const breakdown = new Map<string, { rate: string; net: Decimal; tax: Decimal }>();
+  for (const line of lines) {
+    const rate = text(line.tax_rate_snapshot);
+    const code = text(line.tax_code_snapshot) || text(line.tax_treatment_snapshot) || `rate ${rate}`;
+    if (!rate && !code) continue;
+    const key = `${code}|${rate}`;
+    const current = breakdown.get(key) ?? { rate, net: new Decimal(0), tax: new Decimal(0) };
+    current.net = current.net.plus(new Decimal(String(line.net_amount ?? '0')));
+    current.tax = current.tax.plus(new Decimal(String(line.tax_amount ?? '0')));
+    breakdown.set(key, current);
+  }
+  if (breakdown.size > 0) {
+    layout.spacer(10);
+    layout.line('Tax summary', { bold: true, size: 10 });
+    for (const [key, group] of breakdown) {
+      const label = `${key}${group.rate ? ` ${group.rate}%` : ''}`;
+      layout.line(
+        `${label}: net ${money(group.net)} / VAT ${money(group.tax)}`,
+        { size: 8, gap: 11 },
+      );
+    }
+  }
+
+  const legalNotes: string[] = [
+    ...new Set(
+      lines
+        .map((line: any): string =>
+          line.tax_legal_note
+            ? fillLegalNote(String(line.tax_legal_note), {
+                businessId: text(customer.business_id) || null,
+                vatId: text(customer.vat_id) || null,
+              })
+            : '',
+        )
+        .filter((note): note is string => Boolean(note)),
+    ),
+  ];
+  if (legalNotes.length > 0) {
+    layout.spacer(10);
+    layout.line('Tax notes', { bold: true, size: 10 });
+    for (const note of legalNotes) {
+      layout.wrap(note, 94, { size: 8, gap: 11 });
+    }
+  }
+
   layout.spacer(18);
   layout.line('Thank you for your business.', { size: 9 });
   layout.line(

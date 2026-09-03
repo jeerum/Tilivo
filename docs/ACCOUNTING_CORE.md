@@ -1,4 +1,4 @@
-# Tilivo Accounting Core (v0.5)
+# Tilivo Accounting Core (v0.5 -> v0.8)
 
 ## Purpose
 
@@ -106,6 +106,55 @@ Accounting actions write to the existing v0.4 audit trail:
 entry numbers and object ids only - never secrets or document contents.
 Audit appends are serialised before the transaction starts so the hash chain
 stays valid under parallel writes.
+
+## v0.8 additions
+
+### Journal model
+
+- `journal_entries.document_date` (nullable) keeps the original document date
+  when relevant.
+- `journal_lines.cost_center` and `project_code` are nullable dimension
+  readiness fields. No projects table exists yet; later modules can promote
+  them to real references without a schema-breaking redesign.
+- DB CHECKs enforce non-negative amounts and debit/credit exclusivity per
+  line; posting additionally rejects zero-amount lines.
+- A reversal entry now sets `source_type = JOURNAL_REVERSAL`,
+  `source_id` = original entry id and `reversal_of_entry_id`; purchase
+  correction reversals set `reversal_of_entry_id` too. The DB mirror trigger
+  includes dimension fields.
+
+### Opening balances
+
+`POST /api/v1/opening-balances` creates and posts an auditable
+`OPENING_BALANCE` journal entry in one transaction (date, note, balanced
+lines). Rules:
+
+- posting requires `journal.create` + `journal.post` and an OPEN period;
+- one posted opening balance per tenant per business date (partial unique
+  index; reversed entries do not block a new one);
+- balances are ordinary journal lines - no hidden magic balances;
+- audit event `OPENING_BALANCE.POSTED` records date, entry number and note.
+
+### Chart of accounts
+
+`PATCH /api/v1/accounts/:id` supports `name`, `type` (normal balance is
+derived) and `is_active`. Inactive accounts block posting at the service
+layer. UI has activate/deactivate actions.
+
+### UI
+
+- Accounting workspace gained an "Opening balances" tab, journal detail view
+  (source type/id, reversal links, lines with dimensions), source column in
+  the journal list, account search filter, debit/credit/difference totals and
+  disabled Post for unbalanced drafts.
+- Period close/reopen asks for confirmation.
+- Mobile: journal/entry tables scroll horizontally in wrappers and journal
+  line rows stack vertically on narrow screens.
+
+### Money display
+
+`apps/web/src/lib/money.ts` sums display totals in integer cents to avoid
+float drift; backend remains the authoritative NUMERIC/decimal.js path.
 
 ## Backups and deployment
 

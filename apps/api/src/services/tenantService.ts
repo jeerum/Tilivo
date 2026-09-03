@@ -8,6 +8,7 @@ import {
   type MembershipStatus,
   type TenantStatus,
 } from '../lib/tenant';
+import { seedDefaultFiTaxCodes } from './vatSeed';
 
 export interface TenantCreateInput {
   name: string;
@@ -200,6 +201,7 @@ export async function createTenant(
     );
     const membershipId = String(membershipResult.rows[0]!.id);
     await seedRoles(client, tenantId, membershipId);
+    await seedDefaultFiTaxCodes(client, tenantId);
 
     return {
       tenant: {

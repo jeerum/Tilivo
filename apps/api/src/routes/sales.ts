@@ -29,6 +29,7 @@ import { requirePermission, resolveTenantAccess } from '../services/tenantServic
 import { writeAuditEvent } from '../services/audit';
 import { getDocumentDownload } from '../services/documentStorage';
 import type { LocalObjectStorageProvider } from '../services/documentStorage';
+import { registryCompanySchema } from '../services/businessRegistryTypes';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -39,6 +40,12 @@ const decimalString = z.preprocess(
   z.string().regex(/^\d+(\.\d+)?$/, 'Invalid decimal'),
 );
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional();
+const registryFields = {
+  registry_source: z.string().trim().max(64).nullable().optional(),
+  registry_source_id: z.string().trim().max(64).nullable().optional(),
+  registry_fetched_at: z.string().datetime({ offset: true }).nullable().optional(),
+  registry_snapshot: registryCompanySchema.nullable().optional(),
+};
 
 const customerSchema = z.object({
   name: z.string().trim().min(1).max(300),
@@ -59,6 +66,7 @@ const customerSchema = z.object({
   iban: nullableText(64),
   e_invoice_address: nullableText(300),
   e_invoice_operator: nullableText(300),
+  ...registryFields,
 });
 
 const invoiceLineSchema = z.object({
@@ -163,6 +171,19 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
       objectId: String(customer.id),
       metadata: { customer_id: String(customer.id), name: String(customer.name) },
     });
+    if (parsed.data.registry_source_id) {
+      await writeAuditEvent(db, 'CUSTOMER.REGISTRY_IMPORTED', request, {
+        userId,
+        tenantId,
+        objectType: 'business_party',
+        objectId: String(customer.id),
+        metadata: {
+          customer_id: String(customer.id),
+          registry_source: String(parsed.data.registry_source ?? ''),
+          registry_source_id: parsed.data.registry_source_id,
+        },
+      });
+    }
     return reply.code(201).send({ customer });
   });
 
@@ -190,6 +211,19 @@ export async function salesRoutes(app: FastifyInstance, options: SalesRouteOptio
         objectId: String(customer.id),
         metadata: { customer_id: String(customer.id) },
       });
+      if (parsed.data.registry_source_id) {
+        await writeAuditEvent(db, 'CUSTOMER.REGISTRY_REFRESHED', request, {
+          userId,
+          tenantId,
+          objectType: 'business_party',
+          objectId: String(customer.id),
+          metadata: {
+            customer_id: String(customer.id),
+            registry_source: String(parsed.data.registry_source ?? ''),
+            registry_source_id: parsed.data.registry_source_id,
+          },
+        });
+      }
       return { customer };
     },
   );

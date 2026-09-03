@@ -2,6 +2,20 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../auth/api';
 import { useAuth } from '../auth/AuthContext';
 import { useI18n } from '../i18n/I18nContext';
+import {
+  conflictingRegistryFields,
+  registryFormPatch,
+  registryPartyFields,
+  type RegistryCompany,
+} from '../lib/businessRegistry';
+import { BusinessRegistrySearch } from './BusinessRegistrySearch';
+import { centsToMoney } from '../lib/money';
+import {
+  invoiceTaxCents,
+  lineNetCents,
+  taxRateLabel,
+  type TaxCodeView,
+} from '../lib/tax';
 
 type SalesView = 'customers' | 'invoices';
 type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'CREDITED' | 'CANCELLED_DRAFT';
@@ -17,16 +31,16 @@ interface Customer {
   business_id: string | null;
   vat_id: string | null;
   email: string | null;
+  phone: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  postal_code: string | null;
   country_code: string;
   city: string | null;
+  language: string | null;
+  payment_terms_days: number | null;
+  default_currency: string | null;
   is_active: boolean;
-}
-
-interface TaxCode {
-  id: string;
-  code: string;
-  rate: string;
-  type: string;
 }
 
 interface LineDraft {
@@ -49,9 +63,12 @@ interface SalesLine {
   discount_percent: string;
   net_amount: string;
   tax_code_id: string | null;
+  tax_code_snapshot: string | null;
   tax_rate_snapshot: string | null;
+  tax_treatment_snapshot: string | null;
   tax_amount: string;
   gross_amount: string;
+  tax_legal_note: string | null;
 }
 
 interface SalesInvoice {
@@ -90,16 +107,53 @@ const money = (value: string | number): string => {
   return parsed.toFixed(2);
 };
 
-function lineNet(line: LineDraft): number {
-  const quantity = Number(line.quantity || '0');
-  const unitPrice = Number(line.unit_price || '0');
-  const base = quantity * unitPrice;
-  const discount = (base * Number(line.discount_percent || '0')) / 100;
-  return Math.round((base - discount) * 100) / 100;
+function taxCode(taxCodes: TaxCodeView[], taxCodeId: string): TaxCodeView | undefined {
+  return taxCodes.find((code) => code.id === taxCodeId);
 }
 
-function taxRate(taxCodes: TaxCode[], taxCodeId: string): number {
-  return Number(taxCodes.find((code) => code.id === taxCodeId)?.rate ?? 0);
+function taxLabel(code: TaxCodeView): string {
+  const rate = taxRateLabel(code);
+  return `${code.code}${rate ? ` · ${rate}` : ''}`;
+}
+
+function linePreview(line: LineDraft, code: TaxCodeView | undefined) {
+  const net = lineNetCents({
+    quantity: line.quantity,
+    unitPrice: line.unit_price,
+    discountPercent: line.discount_percent,
+  });
+  const tax = invoiceTaxCents(net, code);
+  return { net: centsToMoney(net), tax: centsToMoney(tax), gross: centsToMoney(net + tax) };
+}
+
+function taxBreakdown(lines: LineDraft[], taxCodes: TaxCodeView[]) {
+  const groups = new Map<string, { code: TaxCodeView; net: number; tax: number }>();
+  for (const line of lines) {
+    if (!line.description.trim()) continue;
+    const code = taxCode(taxCodes, line.tax_code_id);
+    if (!code) continue;
+    const net = lineNetCents({
+      quantity: line.quantity,
+      unitPrice: line.unit_price,
+      discountPercent: line.discount_percent,
+    });
+    const tax = invoiceTaxCents(net, code);
+    const existing = groups.get(code.id);
+    if (existing) {
+      existing.net += net;
+      existing.tax += tax;
+    } else {
+      groups.set(code.id, { code, net, tax });
+    }
+  }
+  return [...groups.values()].map((group) => ({
+    id: group.code.id,
+    label: taxLabel(group.code),
+    rate: taxRateLabel(group.code),
+    net: centsToMoney(group.net),
+    tax: centsToMoney(group.tax),
+    total: centsToMoney(group.net + group.tax),
+  }));
 }
 
 export function SalesPage() {
@@ -121,6 +175,7 @@ export function SalesPage() {
     country_code: 'FI',
     city: '',
     address_line1: '',
+    address_line2: '',
     postal_code: '',
     phone: '',
     payment_terms_days: '14',
@@ -128,8 +183,9 @@ export function SalesPage() {
     language: 'fi',
   });
   const [editingCustomerId, setEditingCustomerId] = useState('');
+  const [registrySelection, setRegistrySelection] = useState<RegistryCompany | null>(null);
 
-  const [taxCodes, setTaxCodes] = useState<TaxCode[]>([]);
+  const [taxCodes, setTaxCodes] = useState<TaxCodeView[]>([]);
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
   const [invoiceSearch, setInvoiceSearch] = useState('');
@@ -170,7 +226,7 @@ export function SalesPage() {
   };
 
   const loadTaxCodes = async () => {
-    const result = await api<{ tax_codes: TaxCode[] }>('/api/v1/tax-codes', { headers });
+    const result = await api<{ tax_codes: TaxCodeView[] }>('/api/v1/tax-codes?current=true&direction=SALES', { headers });
     setTaxCodes(result.tax_codes);
   };
 
@@ -200,6 +256,7 @@ export function SalesPage() {
 
   const resetCustomerDraft = () => {
     setEditingCustomerId('');
+    setRegistrySelection(null);
     setCustomerDraft({
       name: '',
       business_id: '',
@@ -208,6 +265,7 @@ export function SalesPage() {
       country_code: 'FI',
       city: '',
       address_line1: '',
+      address_line2: '',
       postal_code: '',
       phone: '',
       payment_terms_days: '14',
@@ -224,6 +282,9 @@ export function SalesPage() {
         email: customerDraft.email.trim() ? customerDraft.email.trim() : null,
         payment_terms_days: Number(customerDraft.payment_terms_days),
       };
+      if (registrySelection && customerDraft.business_id === registrySelection.business_id) {
+        Object.assign(body, registryPartyFields(registrySelection));
+      }
       if (editingCustomerId) {
         await api(`/api/v1/customers/${editingCustomerId}`, { method: 'PATCH', csrf, headers, body });
       } else {
@@ -236,21 +297,32 @@ export function SalesPage() {
 
   const editCustomer = (customer: Customer) => {
     setEditingCustomerId(customer.id);
+    setRegistrySelection(null);
     setCustomerDraft({
       name: customer.name,
       business_id: customer.business_id ?? '',
       vat_id: customer.vat_id ?? '',
       email: customer.email ?? '',
+      phone: customer.phone ?? '',
       country_code: customer.country_code,
       city: customer.city ?? '',
-      address_line1: '',
-      postal_code: '',
-      phone: '',
-      payment_terms_days: '14',
-      default_currency: 'EUR',
-      language: 'fi',
+      address_line1: customer.address_line1 ?? '',
+      address_line2: customer.address_line2 ?? '',
+      postal_code: customer.postal_code ?? '',
+      payment_terms_days: String(customer.payment_terms_days ?? 14),
+      default_currency: customer.default_currency ?? 'EUR',
+      language: customer.language ?? 'fi',
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const applyRegistryCompany = (company: RegistryCompany) => {
+    const incoming = registryFormPatch(company);
+    const conflicts = conflictingRegistryFields(customerDraft, incoming);
+    if (conflicts.length > 0 && !window.confirm(t('registryOverwriteConfirm'))) return;
+    setCustomerDraft((current) => ({ ...current, ...incoming }));
+    setRegistrySelection(company);
+    setMessage(t('registryApplied'));
   };
 
   const toggleCustomer = async (customer: Customer) => {
@@ -287,14 +359,16 @@ export function SalesPage() {
   };
 
   const previewTotals = () => {
-    let subtotal = 0;
-    let tax = 0;
+    let subtotalCents = 0;
+    let taxCents = 0;
     for (const line of lines) {
-      const net = lineNet(line);
-      subtotal += net;
-      tax += (net * taxRate(taxCodes, line.tax_code_id)) / 100;
+      const net = lineNetCents({ quantity: line.quantity, unitPrice: line.unit_price, discountPercent: line.discount_percent });
+      subtotalCents += net;
+      taxCents += invoiceTaxCents(net, taxCode(taxCodes, line.tax_code_id));
     }
-    return { subtotal: money(subtotal), tax: money(tax), total: money(subtotal + tax) };
+    const subtotal = centsToMoney(subtotalCents);
+    const tax = centsToMoney(taxCents);
+    return { subtotal, tax, total: centsToMoney(subtotalCents + taxCents) };
   };
 
   const saveDraft = async () => {
@@ -443,6 +517,11 @@ export function SalesPage() {
         <section data-testid="customers-panel">
           <details>
             <summary>{editingCustomerId ? t('editCustomer') : t('addCustomer')}</summary>
+            <BusinessRegistrySearch
+              csrf={csrf}
+              headers={headers}
+              onCompany={applyRegistryCompany}
+            />
             <form className="card form-stack" data-testid="customer-form" onSubmit={submitCustomer}>
               <label className="field">
                 <span>{t('name')}</span>
@@ -668,10 +747,16 @@ export function SalesPage() {
                     <option value="">{t('selectTax')}</option>
                     {taxCodes.map((code) => (
                       <option key={code.id} value={code.id}>
-                        {code.code} {Number(code.rate)}%
+                        {taxLabel(code)}
                       </option>
                     ))}
                   </select>
+                  <span className="tax-preview" data-testid={`line-tax-preview-${line.key}`}>
+                    {(() => {
+                      const preview = linePreview(line, taxCode(taxCodes, line.tax_code_id));
+                      return `Net ${preview.net} · VAT ${preview.tax} · Gross ${preview.gross}`;
+                    })()}
+                  </span>
                   <button type="button" onClick={() => removeLine(line.key)}>×</button>
                 </div>
               ))}
@@ -682,6 +767,22 @@ export function SalesPage() {
               <p data-testid="totals-preview">
                 {t('subtotal')}: {totals.subtotal} | {t('taxTotal')}: {totals.tax} | {t('total')}: {totals.total}
               </p>
+              {(() => {
+                const breakdown = taxBreakdown(lines, taxCodes);
+                if (breakdown.length === 0) return null;
+                return (
+                  <div className="tax-breakdown" data-testid="tax-breakdown">
+                    <strong>{t('vatBreakdown')}</strong>
+                    <ul>
+                      {breakdown.map((item) => (
+                        <li key={item.id}>
+                          {item.label}: {item.net} → {item.tax} (gross {item.total})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
             </form>
           </details>
 
@@ -780,7 +881,10 @@ export function SalesPage() {
                       <td>{line.description}</td>
                       <td>{line.quantity}{line.unit ? ` ${line.unit}` : ''}</td>
                       <td className="num">{money(line.unit_price)}</td>
-                      <td className="num">{Number(line.tax_rate_snapshot ?? 0)}%</td>
+                      <td className="num">
+                        {Number(line.tax_rate_snapshot ?? 0)}%
+                        {line.tax_treatment_snapshot ? ` · ${line.tax_treatment_snapshot}` : ''}
+                      </td>
                       <td className="num">{money(line.net_amount)}</td>
                       <td className="num">{money(line.tax_amount)}</td>
                       <td className="num">{money(line.gross_amount)}</td>
@@ -792,6 +896,20 @@ export function SalesPage() {
                 {t('subtotal')}: {money(detail.subtotal)} · {t('taxTotal')}: {money(detail.tax_total)} ·{' '}
                 {t('total')}: <strong>{money(detail.total)}</strong>
               </p>
+              {(() => {
+                const legalNotes = [...new Set((detail.lines ?? []).map((line) => line.tax_legal_note).filter((note): note is string => Boolean(note)))];
+                if (legalNotes.length === 0) return null;
+                return (
+                  <div className="tax-breakdown" data-testid="invoice-legal-notes">
+                    <strong>{t('invoiceNotes')}</strong>
+                    <ul>
+                      {legalNotes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
               {detail.pdf_status && (
                 <p data-testid="pdf-status">
                   {t('pdf')}: {detail.pdf_status === 'READY' ? t('ready') : detail.pdf_status === 'FAILED' ? t('pdfFailed') : t('generatingPdf')}

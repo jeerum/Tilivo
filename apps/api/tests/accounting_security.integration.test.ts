@@ -352,6 +352,12 @@ describe.skipIf(!databaseUrl)('accounting permissions and security', () => {
           tenantId: tenant.tenantId,
           ip: `10.0.40.${role === 'Viewer' ? 12 : 13}`,
         });
+        if (url === '/api/v1/tax-codes') {
+          // tax.read is a read-only permission granted to Viewer/Employee in
+          // v0.9; they must still not manage any accounting data.
+          expect(denied.status).toBe(200);
+          continue;
+        }
         expect(denied.status).toBe(403);
         expect(denied.body.error.code).toBe(ErrorCodes.memberPermissionDenied);
       }
@@ -423,7 +429,12 @@ describe.skipIf(!databaseUrl)('accounting permissions and security', () => {
       });
       expect(bList.status).toBe(200);
       const key = url === '/api/v1/ledger' ? 'ledger' : url === '/api/v1/tax-codes' ? 'tax_codes' : 'fx_rates';
-      expect(Array.isArray(bList.body[key]) ? bList.body[key].length : bList.body.total).toBe(0);
+      const length = Array.isArray(bList.body[key]) ? bList.body[key].length : bList.body.total;
+      if (url === '/api/v1/tax-codes') {
+        expect(length).toBeGreaterThan(0);
+      } else {
+        expect(length).toBe(0);
+      }
     }
 
     const bJournalDetail = await request({

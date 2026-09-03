@@ -5,6 +5,13 @@ import { generatePaymentReference, type PaymentReferenceType } from '../lib/paym
 import { withTenantTransaction } from './tenantService';
 import { createJournalDraftInTransaction, postJournalEntryInTransaction } from './accountingService';
 import { appendOutboxInTransaction } from './integrationQueue';
+import type { RegistryCompany } from './businessRegistryTypes';
+import {
+  calculateVat,
+  isTaxDirectionAllowed,
+  TAX_TREATMENTS,
+  type TaxCodeLike,
+} from './vatEngineService';
 
 export type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'CREDITED' | 'CANCELLED_DRAFT';
 export type PdfStatus = 'GENERATING' | 'READY' | 'FAILED';
@@ -55,6 +62,10 @@ export interface CustomerInput {
   iban?: string | null;
   e_invoice_address?: string | null;
   e_invoice_operator?: string | null;
+  registry_source?: string | null;
+  registry_source_id?: string | null;
+  registry_fetched_at?: string | null;
+  registry_snapshot?: RegistryCompany | null;
 }
 
 export interface SeriesInput {
@@ -250,7 +261,9 @@ async function loadTaxCodesForDate(
 ): Promise<Map<string, any>> {
   if (taxCodeIds.length === 0) return new Map();
   const result = await client.query(
-    `SELECT id, code, name, rate, type, reporting_mapping, is_active
+    `SELECT id, code, name, rate, type, reporting_mapping, is_active,
+            direction, treatment, reverse_charge, intra_eu, is_export, is_import,
+            deductible_percent, legal_notes, is_system
      FROM tax_codes
      WHERE tenant_id = $1 AND id = ANY($2::uuid[])
        AND is_active
@@ -272,24 +285,29 @@ export interface ComputedLine {
   taxType: string;
   reportingMapping: string | null;
   revenueAccountId: string;
+  taxCodeId: string;
+  taxCodeSnapshot: string;
+  treatment: string;
+  classification: string;
+  deductiblePercent: string;
+  taxLegalNote: string;
 }
 
 /**
- * Deterministic line arithmetic, rounded to cents:
+ * Deterministic line arithmetic, rounded to cents, calculated through the
+ * VAT engine:
  *   base = quantity * unit_price
  *   discount = round2(base * discount_percent / 100)
  *   net = round2(base - discount)
- *   tax = round2(net * tax_rate / 100)
- *   gross = net + tax
+ *   tax/gross follow the semantic tax treatment (engine).
  */
 export function computeLineAmounts(input: {
   quantity: string;
   unitPrice: string;
   discountPercent?: string;
-  taxRate: string;
-  taxType: string;
-  reportingMapping?: string | null;
   revenueAccountId: string;
+  taxCode: TaxCodeLike;
+  invoiceLanguage?: string | null;
 }): ComputedLine {
   const quantity = new Decimal(input.quantity);
   const unitPrice = new Decimal(input.unitPrice);
@@ -297,19 +315,31 @@ export function computeLineAmounts(input: {
   const discountPercent = new Decimal(input.discountPercent ?? '0');
   const discount = cents(base.mul(discountPercent).div(100));
   const net = cents(base.minus(discount));
-  const rate = new Decimal(input.taxRate);
-  const reverseCharge = input.taxType === 'REVERSE_CHARGE';
-  const tax = reverseCharge ? new Decimal(0) : cents(net.mul(rate).div(100));
-  const gross = net.plus(tax);
+  const taxCode = input.taxCode;
+  const treatment = taxCode.treatment ?? TAX_TREATMENTS.STANDARD;
+  const calc = calculateVat({
+    direction: 'SALES',
+    treatment,
+    rate: String(taxCode.rate),
+    netAmount: net,
+    legalNotes: taxCode.legal_notes,
+    language: input.invoiceLanguage,
+  });
   return {
     net: net.toFixed(2),
     discount: discount.toFixed(2),
-    tax: tax.toFixed(2),
-    gross: gross.toFixed(2),
-    taxRate: new Decimal(input.taxRate).toString(),
-    taxType: input.taxType,
-    reportingMapping: input.reportingMapping ?? null,
+    tax: calc.invoiceTaxAmount,
+    gross: calc.grossAmount,
+    taxRate: calc.rate,
+    taxType: String(taxCode.type ?? 'VAT'),
+    reportingMapping: taxCode.reporting_mapping ? String(taxCode.reporting_mapping) : null,
     revenueAccountId: input.revenueAccountId,
+    taxCodeId: String(taxCode.id),
+    taxCodeSnapshot: String(taxCode.code),
+    treatment,
+    classification: calc.classification,
+    deductiblePercent: String(taxCode.deductible_percent ?? '100'),
+    taxLegalNote: calc.legalNote,
   };
 }
 
@@ -319,6 +349,7 @@ async function validateInvoiceLines(
   input: InvoiceDraftInput,
   settings: any,
   issueDate: string,
+  language?: string | null,
 ): Promise<ComputedLine[]> {
   if (!Array.isArray(input.lines) || input.lines.length === 0) {
     throw new AppError(ErrorCodes.invoiceHasNoLines, 'Invoice requires at least one line', 400);
@@ -363,6 +394,13 @@ async function validateInvoiceLines(
         400,
       );
     }
+    if (!isTaxDirectionAllowed(String(taxCode.direction ?? 'BOTH') as any, 'SALES')) {
+      throw new AppError(
+        ErrorCodes.taxCodeDirectionIncompatible,
+        'Tax code is not valid for sales invoices',
+        400,
+      );
+    }
     const revenueAccountId = line.revenue_account_id ?? settings.default_sales_revenue_account_id;
     if (!revenueAccountId || !accountSet.has(String(revenueAccountId))) {
       throw new AppError(
@@ -376,10 +414,9 @@ async function validateInvoiceLines(
         quantity: quantity.toString(),
         unitPrice: unitPrice.toString(),
         discountPercent: discountPercent.toString(),
-        taxRate: String(taxCode.rate),
-        taxType: String(taxCode.type),
-        reportingMapping: taxCode.reporting_mapping ? String(taxCode.reporting_mapping) : null,
         revenueAccountId: String(revenueAccountId),
+        taxCode,
+        invoiceLanguage: language ?? input.language,
       }),
     );
   }
@@ -473,8 +510,10 @@ export async function createCustomer(
          (tenant_id, name, is_customer, is_supplier, business_id, vat_id, email, phone,
           address_line1, address_line2, postal_code, city, country_code, language,
           payment_terms_days, default_currency, iban, e_invoice_address, e_invoice_operator,
+          registry_source, registry_source_id, registry_fetched_at, registry_snapshot,
           is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, true)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+               $20, $21, $22, $23, true)
        RETURNING *`,
       [
         tenantId,
@@ -498,6 +537,10 @@ export async function createCustomer(
         input.iban || null,
         input.e_invoice_address || null,
         input.e_invoice_operator || null,
+        input.registry_source || null,
+        input.registry_source_id || null,
+        input.registry_fetched_at || null,
+        input.registry_snapshot ? JSON.stringify(input.registry_snapshot) : null,
       ],
     );
     return result.rows[0];
@@ -544,6 +587,10 @@ export async function updateCustomer(
            iban = $18,
            e_invoice_address = $19,
            e_invoice_operator = $20,
+           registry_source = $21,
+           registry_source_id = $22,
+           registry_fetched_at = $23,
+           registry_snapshot = $24,
            updated_at = now()
        WHERE id = $1 AND tenant_id = $2
        RETURNING *`,
@@ -568,6 +615,16 @@ export async function updateCustomer(
         patch.iban === undefined ? existing.iban : patch.iban || null,
         patch.e_invoice_address === undefined ? existing.e_invoice_address : patch.e_invoice_address || null,
         patch.e_invoice_operator === undefined ? existing.e_invoice_operator : patch.e_invoice_operator || null,
+        patch.registry_source === undefined ? existing.registry_source : patch.registry_source || null,
+        patch.registry_source_id === undefined ? existing.registry_source_id : patch.registry_source_id || null,
+        patch.registry_fetched_at === undefined
+          ? existing.registry_fetched_at
+          : patch.registry_fetched_at || null,
+        patch.registry_snapshot === undefined
+          ? existing.registry_snapshot
+          : patch.registry_snapshot
+            ? JSON.stringify(patch.registry_snapshot)
+            : null,
       ],
     );
     return result.rows[0];
@@ -795,8 +852,9 @@ async function insertInvoiceLines(
       `INSERT INTO sales_invoice_lines
          (tenant_id, sales_invoice_id, line_number, description, quantity, unit, unit_price,
           discount_percent, net_amount, tax_code_id, tax_rate_snapshot, tax_type_snapshot,
-          reporting_mapping_snapshot, tax_amount, gross_amount, revenue_account_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+          reporting_mapping_snapshot, tax_amount, gross_amount, revenue_account_id,
+          tax_code_snapshot, tax_treatment_snapshot, deductible_percent_snapshot, tax_legal_note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
       [
         tenantId,
         invoiceId,
@@ -814,6 +872,10 @@ async function insertInvoiceLines(
         line.computed.tax,
         line.computed.gross,
         line.computed.revenueAccountId,
+        line.computed.taxCodeSnapshot,
+        line.computed.treatment,
+        line.computed.deductiblePercent,
+        line.computed.taxLegalNote,
       ],
     );
     lineNumber += 1;
@@ -871,7 +933,7 @@ async function parseInvoiceDraftInput(
   if (dueDate < issueDate) {
     throw new AppError(ErrorCodes.invalidDueDate, 'Due date must not be before the invoice date', 400);
   }
-  const computed = await validateInvoiceLines(client, tenantId, input, settings, issueDate);
+  const computed = await validateInvoiceLines(client, tenantId, input, settings, issueDate, language);
   const lines = input.lines.map((line, index) => ({
     ...line,
     taxCodeId: line.tax_code_id,
@@ -1140,16 +1202,22 @@ async function issueInvoiceInTransaction(
         400,
       );
     }
+    if (!isTaxDirectionAllowed(String(taxCode.direction ?? 'BOTH') as any, 'SALES')) {
+      throw new AppError(
+        ErrorCodes.taxCodeDirectionIncompatible,
+        'Tax code is not valid for sales invoices',
+        400,
+      );
+    }
     return {
       row,
       computed: computeLineAmounts({
         quantity: String(row.quantity),
         unitPrice: String(row.unit_price),
         discountPercent: String(row.discount_percent ?? '0'),
-        taxRate: String(taxCode.rate),
-        taxType: String(taxCode.type),
-        reportingMapping: taxCode.reporting_mapping ? String(taxCode.reporting_mapping) : null,
         revenueAccountId: String(row.revenue_account_id),
+        taxCode,
+        invoiceLanguage: String(invoice.language ?? 'fi'),
       }),
       taxCode,
     };
@@ -1162,7 +1230,8 @@ async function issueInvoiceInTransaction(
       `UPDATE sales_invoice_lines
        SET net_amount = $3, tax_rate_snapshot = $4, tax_type_snapshot = $5,
            reporting_mapping_snapshot = $6, tax_amount = $7, gross_amount = $8,
-           revenue_account_id = $9
+           revenue_account_id = $9, tax_code_snapshot = $10, tax_treatment_snapshot = $11,
+           deductible_percent_snapshot = $12, tax_legal_note = $13
        WHERE id = $1 AND tenant_id = $2`,
       [
         item.row.id,
@@ -1174,6 +1243,10 @@ async function issueInvoiceInTransaction(
         item.computed.tax,
         item.computed.gross,
         item.computed.revenueAccountId,
+        item.computed.taxCodeSnapshot,
+        item.computed.treatment,
+        item.computed.deductiblePercent,
+        item.computed.taxLegalNote,
       ],
     );
     subtotal = subtotal.plus(new Decimal(item.computed.net));
@@ -1196,7 +1269,7 @@ async function issueInvoiceInTransaction(
 
   // Build journal lines. AR debit = total; revenue credits aggregated per
   // (account, tax code); VAT payable credits aggregated per tax code.
-  const journalLines: Array<{
+  interface JournalMeta {
     accountId: string;
     description: string;
     debit: string;
@@ -1204,7 +1277,17 @@ async function issueInvoiceInTransaction(
     taxCodeId: string | null;
     appliedTaxRate: string | null;
     taxSnapshot: string | null;
-  }> = [];
+    taxCodeSnapshot: string | null;
+    taxTreatmentSnapshot: string | null;
+    taxableBaseSnapshot: string | null;
+    taxAmountSnapshot: string | null;
+    taxDeductibleSnapshot: string | null;
+    taxNondeductibleSnapshot: string | null;
+    taxLegType: string | null;
+    taxReportingClassification: string | null;
+    taxLegalNote: string | null;
+  }
+  const journalLines: JournalMeta[] = [];
   const arAccount = settings.accounts_receivable_account_id;
   const taxPayableAccount = settings.tax_payable_account_id;
   if (!arAccount) {
@@ -1226,10 +1309,25 @@ async function issueInvoiceInTransaction(
     taxCodeId: null,
     appliedTaxRate: null,
     taxSnapshot: null,
+    taxCodeSnapshot: null,
+    taxTreatmentSnapshot: null,
+    taxableBaseSnapshot: null,
+    taxAmountSnapshot: null,
+    taxDeductibleSnapshot: null,
+    taxNondeductibleSnapshot: null,
+    taxLegType: null,
+    taxReportingClassification: null,
+    taxLegalNote: null,
   });
 
-  const revenueGroups = new Map<string, { accountId: string; net: Decimal; taxCode: any }>();
-  const taxGroups = new Map<string, { accountId: string; tax: Decimal; taxCode: any }>();
+  const revenueGroups = new Map<
+    string,
+    { accountId: string; net: Decimal; taxCode: any; computed: ComputedLine }
+  >();
+  const taxGroups = new Map<
+    string,
+    { accountId: string; tax: Decimal; base: Decimal; taxCode: any; computed: ComputedLine }
+  >();
   for (const item of recomputed) {
     const net = new Decimal(item.computed.net);
     const tax = new Decimal(item.computed.tax);
@@ -1242,6 +1340,7 @@ async function issueInvoiceInTransaction(
         accountId: item.computed.revenueAccountId,
         net,
         taxCode: item.taxCode,
+        computed: item.computed,
       });
     }
     if (tax.greaterThan(0)) {
@@ -1249,11 +1348,14 @@ async function issueInvoiceInTransaction(
       const existingTax = taxGroups.get(taxKey);
       if (existingTax) {
         existingTax.tax = existingTax.tax.plus(tax);
+        existingTax.base = existingTax.base.plus(net);
       } else {
         taxGroups.set(taxKey, {
           accountId: String(taxPayableAccount),
           tax,
+          base: net,
           taxCode: item.taxCode,
+          computed: item.computed,
         });
       }
     }
@@ -1270,6 +1372,15 @@ async function issueInvoiceInTransaction(
       taxCodeId: String(group.taxCode.id),
       appliedTaxRate: String(group.taxCode.rate),
       taxSnapshot: `${String(group.taxCode.code)}|${String(group.taxCode.type)}`,
+      taxCodeSnapshot: group.computed.taxCodeSnapshot,
+      taxTreatmentSnapshot: group.computed.treatment,
+      taxableBaseSnapshot: amount,
+      taxAmountSnapshot: '0.00',
+      taxDeductibleSnapshot: '0.00',
+      taxNondeductibleSnapshot: '0.00',
+      taxLegType: 'REVENUE',
+      taxReportingClassification: group.computed.classification,
+      taxLegalNote: group.computed.taxLegalNote,
     });
   }
   for (const group of taxGroups.values()) {
@@ -1283,6 +1394,15 @@ async function issueInvoiceInTransaction(
       taxCodeId: String(group.taxCode.id),
       appliedTaxRate: String(group.taxCode.rate),
       taxSnapshot: `${String(group.taxCode.code)}|${String(group.taxCode.type)}`,
+      taxCodeSnapshot: group.computed.taxCodeSnapshot,
+      taxTreatmentSnapshot: group.computed.treatment,
+      taxableBaseSnapshot: group.base.toFixed(2),
+      taxAmountSnapshot: amount,
+      taxDeductibleSnapshot: '0.00',
+      taxNondeductibleSnapshot: '0.00',
+      taxLegType: 'OUTPUT_VAT',
+      taxReportingClassification: group.computed.classification,
+      taxLegalNote: group.computed.taxLegalNote,
     });
   }
 

@@ -7,6 +7,12 @@ const logLevels = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']
 const environments = ['development', 'test', 'staging', 'production'] as const;
 const emailDrivers = ['dev', 'noop'] as const;
 
+const optionalInt = (fallback: number, min: number, max: number) =>
+  z.preprocess(
+    (value) => (value === undefined || value === '' ? fallback : Number(value)),
+    z.number().int().min(min).max(max),
+  );
+
 const toBoolean = (value: unknown, fallback: boolean) => {
   if (value === undefined || value === '') return fallback;
   return value === 'true' || value === '1';
@@ -39,6 +45,18 @@ const AppEnvSchema = z.object({
   EMAIL_DEV_OUTBOX: z.preprocess((value) => toBoolean(value, false), z.boolean()),
   TOTP_ENCRYPTION_KEY: z.string().default(''),
   DOCUMENT_STORAGE_DIR: z.string().min(1).default('/app/storage/documents'),
+  BUSINESS_REGISTRY_ENABLED: z.preprocess(
+    (value) => toBoolean(value, true),
+    z.boolean(),
+  ),
+  BUSINESS_REGISTRY_BASE_URL: z
+    .string()
+    .url('BUSINESS_REGISTRY_BASE_URL must be a URL')
+    .default('https://avoindata.prh.fi/opendata-ytj-api/v3'),
+  BUSINESS_REGISTRY_TIMEOUT_MS: optionalInt(8000, 250, 60_000),
+  BUSINESS_REGISTRY_CACHE_TTL_SECONDS: optionalInt(43_200, 60, 7 * 24 * 60 * 60),
+  BUSINESS_REGISTRY_RATE_LIMIT_PER_MINUTE: optionalInt(20, 1, 600),
+  RATE_LIMIT_MAX: optionalInt(300, 10, 1_000_000),
 });
 
 export type AppConfig = z.infer<typeof AppEnvSchema>;
