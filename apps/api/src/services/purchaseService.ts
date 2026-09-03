@@ -9,7 +9,7 @@ import {
 } from './purchaseInvoiceParsers';
 import { withTenantTransaction } from './tenantService';
 import { createJournalDraftInTransaction, postJournalEntryInTransaction } from './accountingService';
-import { uploadDocument, type LocalObjectStorageProvider } from './documentStorage';
+import { getDocumentDownload, uploadDocument, type LocalObjectStorageProvider } from './documentStorage';
 import type { RegistryCompany } from './businessRegistryTypes';
 import {
   calculateVat,
@@ -18,6 +18,7 @@ import {
   treatmentFromLegacyType,
   type TaxCodeLike,
 } from './vatEngineService';
+import type { DocumentOcrProvider, OcrResult } from './ocrService';
 
 export type PurchaseStatus =
   | 'INGESTED'
@@ -41,12 +42,13 @@ export interface PurchaseLineDraft {
   tax_type?: string | null;
   tax_amount?: string | null;
   deductible_percent?: string | null;
-  expense_account_id: string;
+  expense_account_id?: string | null;
   cost_center?: string | null;
 }
 
 export interface PurchaseDraftInput {
-  supplier_id: string;
+  supplier_id?: string | null;
+  merchant_name?: string | null;
   supplier_invoice_number?: string;
   invoice_date: string;
   due_date?: string;
@@ -54,6 +56,10 @@ export interface PurchaseDraftInput {
   supplier_reference?: string | null;
   supplier_iban?: string | null;
   source_type?: string;
+  document_type?: string;
+  payment_method?: string;
+  payment_status?: string;
+  description?: string | null;
   lines: PurchaseLineDraft[];
 }
 
@@ -88,6 +94,9 @@ export interface PurchaseSettingsPatch {
   input_vat_account_id?: string | null;
   reverse_charge_input_account_id?: string | null;
   reverse_charge_output_account_id?: string | null;
+  cash_account_id?: string | null;
+  company_card_account_id?: string | null;
+  employee_payable_account_id?: string | null;
   require_separate_approver?: boolean;
   auto_post_on_approval?: boolean;
   default_currency?: string;
@@ -348,6 +357,9 @@ export async function updatePurchaseSettings(
       ['input_vat_account_id', patch.input_vat_account_id],
       ['reverse_charge_input_account_id', patch.reverse_charge_input_account_id],
       ['reverse_charge_output_account_id', patch.reverse_charge_output_account_id],
+      ['cash_account_id', patch.cash_account_id],
+      ['company_card_account_id', patch.company_card_account_id],
+      ['employee_payable_account_id', patch.employee_payable_account_id],
     ];
     if (accountFields.some(([, value]) => value !== undefined)) {
       for (const [column, value] of accountFields) {
@@ -466,6 +478,34 @@ function supplierSnapshot(row: any): Record<string, unknown> {
   };
 }
 
+export function resolvePurchaseCounterAccount(
+  paymentMethod: string,
+  paymentStatus: string,
+  settings: {
+    accounts_payable_account_id?: string | null;
+    cash_account_id?: string | null;
+    company_card_account_id?: string | null;
+    employee_payable_account_id?: string | null;
+  },
+): { accountId: string | null; kind: 'AP' | 'CASH' | 'COMPANY_CARD' | 'EMPLOYEE_PAYABLE' | null; paidAtPurchase: boolean } {
+  const method = String(paymentMethod ?? 'BANK_TRANSFER');
+  const status = String(paymentStatus ?? 'UNPAID');
+  const paidAtPurchase = status === 'PAID_AT_PURCHASE' || (status === 'PAID' && method !== 'BANK_TRANSFER');
+  if (!paidAtPurchase) {
+    return { accountId: settings.accounts_payable_account_id ?? null, kind: 'AP', paidAtPurchase: false };
+  }
+  if (method === 'CASH') {
+    return { accountId: settings.cash_account_id ?? null, kind: 'CASH', paidAtPurchase: true };
+  }
+  if (method === 'COMPANY_CARD') {
+    return { accountId: settings.company_card_account_id ?? null, kind: 'COMPANY_CARD', paidAtPurchase: true };
+  }
+  if (method === 'PERSONAL_CARD' || method === 'EMPLOYEE_PAID') {
+    return { accountId: settings.employee_payable_account_id ?? null, kind: 'EMPLOYEE_PAYABLE', paidAtPurchase: true };
+  }
+  return { accountId: settings.accounts_payable_account_id ?? null, kind: 'AP', paidAtPurchase: true };
+}
+
 async function validateLines(
   client: DbClient,
   tenantId: string,
@@ -478,7 +518,7 @@ async function validateLines(
   }
   const taxIds = [...new Set(lines.map((line) => line.tax_code_id))];
   const taxMap = await loadTaxCodesForDate(client, tenantId, taxIds, invoiceDate);
-  const accountIds = [...new Set(lines.map((line) => line.expense_account_id))].filter(
+  const accountIds = [...new Set([...lines.map((line) => line.expense_account_id), defaultExpenseAccountId])].filter(
     (id): id is string => typeof id === 'string' && id.length > 0,
   );
   const accounts = accountIds.length
@@ -507,7 +547,7 @@ async function validateLines(
     if (deductibleDecimal.lessThan(0) || deductibleDecimal.greaterThan(100)) {
       throw new AppError(ErrorCodes.deductibilityInvalid, 'Deductibility must be between 0 and 100 percent', 400);
     }
-    const expenseAccountId = line.expense_account_id ?? defaultExpenseAccountId;
+    const expenseAccountId = line.expense_account_id || defaultExpenseAccountId;
     if (!expenseAccountId || !accountSet.has(String(expenseAccountId))) {
       throw new AppError(ErrorCodes.invalidPurchaseLine, 'Expense account is required and must belong to the tenant', 400);
     }
@@ -646,6 +686,70 @@ async function findDuplicate(
   return result.rows[0] ?? null;
 }
 
+async function detectDuplicateWarning(
+  client: DbClient,
+  tenantId: string,
+  purchase: any,
+): Promise<string | null> {
+  const values: unknown[] = [tenantId, purchase.id];
+  const clauses: string[] = [
+    `id <> $2`,
+    `status NOT IN ('REJECTED','CANCELLED_DRAFT','CORRECTED')`,
+  ];
+  if (purchase.supplier_id) {
+    values.push(purchase.supplier_id);
+    clauses.push(`supplier_id = $${values.length}`);
+  } else {
+    clauses.push(`supplier_id IS NULL`);
+  }
+  if (purchase.invoice_date) {
+    const dateValue = purchase.invoice_date instanceof Date
+      ? `${purchase.invoice_date.getFullYear()}-${String(purchase.invoice_date.getMonth() + 1).padStart(2, '0')}-${String(purchase.invoice_date.getDate()).padStart(2, '0')}`
+      : String(purchase.invoice_date).slice(0, 10);
+    values.push(dateValue);
+    clauses.push(`invoice_date = $${values.length}::date`);
+  }
+  // Exact source-file hash duplicate is the strongest signal and takes
+  // priority over softer date/total heuristics.
+  const ownHash = await client.query(
+    `SELECT dv.sha256
+     FROM purchase_invoice_documents pid
+     JOIN document_versions dv ON dv.id = pid.document_version_id AND dv.tenant_id = pid.tenant_id
+     WHERE pid.purchase_invoice_id = $2 AND pid.tenant_id = $1 AND dv.sha256 IS NOT NULL
+     LIMIT 1`,
+    [tenantId, purchase.id],
+  );
+  if (ownHash.rows[0]) {
+    const hashMatch = await client.query(
+      `SELECT pid.purchase_invoice_id
+       FROM purchase_invoice_documents pid
+       JOIN document_versions dv ON dv.id = pid.document_version_id AND dv.tenant_id = pid.tenant_id
+       WHERE pid.tenant_id = $1 AND dv.sha256 = $2 AND pid.purchase_invoice_id <> $3
+       LIMIT 1`,
+      [tenantId, String(ownHash.rows[0].sha256), purchase.id],
+    );
+    if (hashMatch.rows[0]) {
+      return 'Possible duplicate: identical source file was already uploaded.';
+    }
+  }
+  const total = String(purchase.total ?? '0');
+  values.push(total);
+  clauses.push(`ABS(total - $${values.length}::numeric) < 0.01`);
+  const similar = await client.query(
+    `SELECT document_type, merchant_name, supplier_invoice_number, invoice_date, total
+     FROM purchase_invoices
+     WHERE tenant_id = $1 AND ${clauses.join(' AND ')}
+     ORDER BY created_at DESC LIMIT 1`,
+    values,
+  );
+  if (similar.rows[0]) {
+    const row = similar.rows[0];
+    const label = row.merchant_name || String(row.supplier_invoice_number ?? 'document');
+    return `Possible duplicate: same supplier, date and total as ${label}.`;
+  }
+  return null;
+}
+
 async function matchSupplier(
   client: DbClient,
   tenantId: string,
@@ -698,6 +802,9 @@ export async function listPurchases(
   filters: {
     status?: PurchaseStatus;
     supplierId?: string;
+    documentType?: string;
+    paymentMethod?: string;
+    duplicateWarning?: boolean;
     from?: string;
     to?: string;
     source?: string;
@@ -716,6 +823,17 @@ export async function listPurchases(
     if (filters.supplierId) {
       values.push(filters.supplierId);
       clauses.push(`pi.supplier_id = $${values.length}`);
+    }
+    if (filters.documentType) {
+      values.push(filters.documentType);
+      clauses.push(`pi.document_type = $${values.length}`);
+    }
+    if (filters.paymentMethod) {
+      values.push(filters.paymentMethod);
+      clauses.push(`pi.payment_method = $${values.length}`);
+    }
+    if (filters.duplicateWarning) {
+      clauses.push(`pi.duplicate_warning IS NOT NULL`);
     }
     if (filters.from) {
       values.push(filters.from);
@@ -767,35 +885,57 @@ export async function createPurchaseInvoiceDraft(
 ): Promise<any> {
   return withTenantTransaction(pool, tenantId, async (client) => {
     const settings = await ensurePurchaseSettingsRow(client, tenantId);
-    const supplier = await client.query(
-      'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
-      [input.supplier_id, tenantId],
-    );
-    if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
-    if (!supplier.rows[0].is_active) throw new AppError(ErrorCodes.supplierInactive, 'Supplier is inactive', 409);
-    const invoiceDate = input.invoice_date;
-    const dueDate = input.due_date ?? invoiceDate;
+    let supplierId: string | null = null;
+    let supplierRow: any = null;
+    if (input.supplier_id) {
+      const supplier = await client.query(
+        'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
+        [input.supplier_id, tenantId],
+      );
+      if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+      if (!supplier.rows[0].is_active) throw new AppError(ErrorCodes.supplierInactive, 'Supplier is inactive', 409);
+      supplierId = input.supplier_id;
+      supplierRow = supplier.rows[0];
+    }
+    const merchantName = String(input.merchant_name ?? supplierRow?.name ?? '').trim();
+    if (!merchantName && !supplierId) {
+      throw new AppError(ErrorCodes.invalidPurchaseLine, 'Supplier or merchant name is required', 400);
+    }
+    const invoiceDate = toDateString(input.invoice_date);
+    const dueDate = toDateString(input.due_date ?? invoiceDate);
     if (dueDate < invoiceDate) throw new AppError(ErrorCodes.invalidDueDate, 'Due date before invoice date', 400);
     const currency = String(input.currency_code ?? settings.default_currency ?? 'EUR').toUpperCase();
     await validateCurrency(client, currency);
     const rows = await validateLines(client, tenantId, invoiceDate, input.lines, settings.default_expense_account_id);
     const totals = totalsOf(rows);
     const normalized = normalizeSupplierInvoiceNumber(input.supplier_invoice_number ?? '');
-    if (await findDuplicate(client, tenantId, input.supplier_id, normalized, invoiceDate)) {
+    if (supplierId && (await findDuplicate(client, tenantId, supplierId, normalized, invoiceDate))) {
       throw new AppError(ErrorCodes.duplicatePurchase, 'Duplicate supplier invoice', 409);
     }
+    const documentType = String(input.document_type ?? 'PURCHASE_INVOICE');
+    const paymentMethod = String(input.payment_method ?? 'BANK_TRANSFER');
+    const paymentStatus = input.payment_status
+      ? String(input.payment_status)
+      : paymentMethod === 'BANK_TRANSFER'
+        ? 'UNPAID'
+        : 'PAID_AT_PURCHASE';
+    const snapshot = supplierRow
+      ? JSON.stringify(supplierSnapshot(supplierRow))
+      : JSON.stringify({ name: merchantName, is_adhoc: true });
     const inserted = await client.query(
       `INSERT INTO purchase_invoices
          (tenant_id, company_id, supplier_id, status, supplier_invoice_number,
           supplier_invoice_number_normalized, invoice_date, due_date, currency_code,
           supplier_reference, supplier_iban, source_type, supplier_snapshot, subtotal,
-          tax_total, total, created_by)
-       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6::date, $7::date, $8, $9, $10, 'MANUAL', $11, $12, $13, $14, $15)
+          tax_total, total, created_by, document_type, payment_method, payment_status,
+          merchant_name, description)
+       VALUES ($1, $2, $3, 'DRAFT', $4, $5, $6::date, $7::date, $8, $9, $10, 'MANUAL', $11, $12, $13, $14, $15,
+               $16, $17, $18, $19, $20)
        RETURNING *`,
       [
         tenantId,
         settings.company_id ?? null,
-        input.supplier_id,
+        supplierId,
         input.supplier_invoice_number || null,
         normalized || null,
         invoiceDate,
@@ -803,15 +943,29 @@ export async function createPurchaseInvoiceDraft(
         currency,
         input.supplier_reference || null,
         input.supplier_iban || null,
-        JSON.stringify(supplierSnapshot(supplier.rows[0])),
+        snapshot,
         totals.subtotal,
         totals.taxTotal,
         totals.total,
         userId,
+        documentType,
+        paymentMethod,
+        paymentStatus,
+        merchantName || null,
+        input.description?.trim() || null,
       ],
     );
-    await insertPurchaseLines(client, tenantId, String(inserted.rows[0].id), rows);
-    return getPurchaseById(client, tenantId, String(inserted.rows[0].id));
+    const purchaseId = String(inserted.rows[0].id);
+    await insertPurchaseLines(client, tenantId, purchaseId, rows);
+    const warning = await detectDuplicateWarning(client, tenantId, inserted.rows[0]);
+    if (warning) {
+      await client.query('UPDATE purchase_invoices SET duplicate_warning = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2', [
+        purchaseId,
+        tenantId,
+        warning,
+      ]);
+    }
+    return getPurchaseById(client, tenantId, purchaseId);
   });
 }
 
@@ -827,30 +981,49 @@ export async function updatePurchaseInvoiceDraft(
       throw new AppError(ErrorCodes.purchaseNotEditable, 'Purchase invoice is not editable', 409);
     }
     const settings = await ensurePurchaseSettingsRow(client, tenantId);
-    const supplier = await client.query(
-      'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
-      [input.supplier_id, tenantId],
-    );
-    if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
-    const invoiceDate = input.invoice_date;
-    const dueDate = input.due_date ?? invoiceDate;
+    let supplierId: string | null = null;
+    let supplierRow: any = null;
+    if (input.supplier_id) {
+      const supplier = await client.query(
+        'SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2 AND is_supplier',
+        [input.supplier_id, tenantId],
+      );
+      if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier not found', 404);
+      supplierId = input.supplier_id;
+      supplierRow = supplier.rows[0];
+    }
+    const merchantName = String(input.merchant_name ?? supplierRow?.name ?? '').trim();
+    if (!merchantName && !supplierId) {
+      throw new AppError(ErrorCodes.invalidPurchaseLine, 'Supplier or merchant name is required', 400);
+    }
+    const invoiceDate = toDateString(input.invoice_date);
+    const dueDate = toDateString(input.due_date ?? invoiceDate);
     if (dueDate < invoiceDate) throw new AppError(ErrorCodes.invalidDueDate, 'Due date before invoice date', 400);
     const currency = String(input.currency_code ?? existing.currency_code ?? 'EUR').toUpperCase();
     await validateCurrency(client, currency);
     const rows = await validateLines(client, tenantId, invoiceDate, input.lines, settings.default_expense_account_id);
     const totals = totalsOf(rows);
     const normalized = normalizeSupplierInvoiceNumber(input.supplier_invoice_number ?? '');
+    const documentType = String(input.document_type ?? existing.document_type ?? 'PURCHASE_INVOICE');
+    const paymentMethod = String(input.payment_method ?? existing.payment_method ?? 'BANK_TRANSFER');
+    const paymentStatus = input.payment_status
+      ? String(input.payment_status)
+      : String(existing.payment_status ?? (paymentMethod === 'BANK_TRANSFER' ? 'UNPAID' : 'PAID_AT_PURCHASE'));
     await client.query(
       `UPDATE purchase_invoices
-       SET supplier_id = $3, supplier_invoice_number = $4, supplier_invoice_number_normalized = $5,
-           invoice_date = $6::date, due_date = $7::date, currency_code = $8,
-           supplier_reference = $9, supplier_iban = $10, supplier_snapshot = $11::jsonb,
-           subtotal = $12, tax_total = $13, total = $14, updated_at = now()
+       SET supplier_id = $3, merchant_name = $4, supplier_invoice_number = $5,
+           supplier_invoice_number_normalized = $6,
+           invoice_date = $7::date, due_date = $8::date, currency_code = $9,
+           supplier_reference = $10, supplier_iban = $11, supplier_snapshot = $12::jsonb,
+           subtotal = $13, tax_total = $14, total = $15, document_type = $16,
+           payment_method = $17, payment_status = $18, description = $19,
+           duplicate_warning = NULL, updated_at = now()
        WHERE id = $1 AND tenant_id = $2`,
       [
         purchaseId,
         tenantId,
-        input.supplier_id,
+        supplierId,
+        merchantName || null,
         input.supplier_invoice_number || null,
         normalized || null,
         invoiceDate,
@@ -858,10 +1031,14 @@ export async function updatePurchaseInvoiceDraft(
         currency,
         input.supplier_reference || null,
         input.supplier_iban || null,
-        JSON.stringify(supplierSnapshot(supplier.rows[0])),
+        supplierRow ? JSON.stringify(supplierSnapshot(supplierRow)) : JSON.stringify({ name: merchantName, is_adhoc: true }),
         totals.subtotal,
         totals.taxTotal,
         totals.total,
+        documentType,
+        paymentMethod,
+        paymentStatus,
+        input.description?.trim() || null,
       ],
     );
     await client.query('DELETE FROM purchase_invoice_lines WHERE purchase_invoice_id = $1', [purchaseId]);
@@ -888,15 +1065,28 @@ export async function reviewPurchaseInvoice(
     if (Number(lines.rows[0]?.count ?? 0) === 0) {
       throw new AppError(ErrorCodes.purchaseHasNoLines, 'Purchase invoice has no lines', 400);
     }
-    const supplier = invoice.supplier_id
-      ? await client.query('SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2', [
-          invoice.supplier_id,
-          tenantId,
-        ])
-      : null;
-    if (!supplier?.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier must be confirmed before review', 400);
-    if (!supplier.rows[0].is_active) throw new AppError(ErrorCodes.supplierInactive, 'Supplier is inactive', 409);
-    const snapshot = JSON.stringify(supplierSnapshot(supplier.rows[0]));
+    let snapshot: string;
+    if (invoice.supplier_id) {
+      const supplier = await client.query('SELECT * FROM business_parties WHERE id = $1 AND tenant_id = $2', [
+        invoice.supplier_id,
+        tenantId,
+      ]);
+      if (!supplier.rows[0]) throw new AppError(ErrorCodes.supplierNotFound, 'Supplier must be confirmed before review', 400);
+      if (!supplier.rows[0].is_active) throw new AppError(ErrorCodes.supplierInactive, 'Supplier is inactive', 409);
+      snapshot = JSON.stringify(supplierSnapshot(supplier.rows[0]));
+    } else {
+      const existingSnapshot = invoice.supplier_snapshot && typeof invoice.supplier_snapshot === 'object'
+        ? invoice.supplier_snapshot
+        : {};
+      if (Object.keys(existingSnapshot).length === 0 && !invoice.merchant_name) {
+        throw new AppError(ErrorCodes.supplierNotFound, 'Merchant name must be confirmed before review', 400);
+      }
+      snapshot = JSON.stringify({
+        ...(existingSnapshot as Record<string, unknown>),
+        name: existingSnapshot.name ?? invoice.merchant_name ?? '',
+        is_adhoc: true,
+      });
+    }
     await client.query(
       `UPDATE purchase_invoices
        SET status = 'READY_FOR_APPROVAL', supplier_snapshot = $3::jsonb,
@@ -972,10 +1162,20 @@ async function postApprovedPurchase(
   if (String(invoice.status) !== 'APPROVED') {
     throw new AppError(ErrorCodes.purchaseNotEditable, 'Only approved purchase invoices can be posted', 409);
   }
-  const apAccount = settings.accounts_payable_account_id;
   const inputVatAccount = settings.input_vat_account_id;
-  if (!apAccount) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Accounts payable account is not configured', 409);
   if (!inputVatAccount) throw new AppError(ErrorCodes.purchaseAccountMappingMissing, 'Input VAT account is not configured', 409);
+  const paymentMethod = String(invoice.payment_method ?? 'BANK_TRANSFER');
+  const paymentStatus = String(invoice.payment_status ?? 'UNPAID');
+  const resolvedCounter = resolvePurchaseCounterAccount(paymentMethod, paymentStatus, settings);
+  const paidAtPurchase = resolvedCounter.paidAtPurchase;
+  const counterAccount = resolvedCounter.accountId;
+  if (!counterAccount) {
+    throw new AppError(
+      ErrorCodes.purchaseAccountMappingMissing,
+      paidAtPurchase ? `${paymentMethod} counter account is not configured` : 'Accounts payable account is not configured',
+      409,
+    );
+  }
 
   const lineRows = await client.query(
     `SELECT pl.*, tc.code AS tax_code, tc.type AS tax_type, tc.rate AS tax_rate,
@@ -1116,7 +1316,8 @@ async function postApprovedPurchase(
       }
     }
   }
-  const description = `Purchase invoice ${String(invoice.supplier_invoice_number ?? purchaseId)}`;
+  const docLabel = String(invoice.document_type ?? 'PURCHASE_INVOICE') === 'RECEIPT' ? 'Receipt' : 'Purchase invoice';
+  const description = `${docLabel} ${String(invoice.supplier_invoice_number ?? invoice.merchant_name ?? purchaseId)}`;
   for (const group of expenseGroups.values()) {
     journalLines.push({
       accountId: group.accountId,
@@ -1165,7 +1366,7 @@ async function postApprovedPurchase(
     });
   }
   journalLines.push({
-    accountId: String(apAccount),
+    accountId: String(counterAccount),
     description,
     debit: '0',
     credit: apTotal.toFixed(2),
@@ -1533,6 +1734,212 @@ export async function cancelPurchaseDraft(
     );
     return getPurchaseById(client, tenantId, purchaseId);
   });
+}
+
+export async function runPurchaseOcr(
+  pool: Db,
+  tenantId: string,
+  userId: string,
+  purchaseId: string,
+  provider: DocumentOcrProvider,
+  storage: LocalObjectStorageProvider,
+): Promise<any> {
+  const source = await withTenantTransaction(pool, tenantId, async (client) => {
+    const invoice = await client.query(
+      `SELECT * FROM purchase_invoices WHERE id = $1 AND tenant_id = $2`,
+      [purchaseId, tenantId],
+    );
+    if (!invoice.rows[0]) throw new AppError(ErrorCodes.purchaseNotFound, 'Purchase document not found', 404);
+    const status = String(invoice.rows[0].status);
+    if (!['DRAFT', 'INGESTED', 'NEEDS_REVIEW'].includes(status)) {
+      throw new AppError(ErrorCodes.purchaseImmutable, 'OCR is only available on editable purchase documents', 409);
+    }
+    const docs = await client.query(
+      `SELECT pid.document_id
+       FROM purchase_invoice_documents pid
+       WHERE pid.purchase_invoice_id = $1 AND pid.tenant_id = $2 AND pid.role = 'SOURCE'
+       ORDER BY pid.created_at DESC LIMIT 1`,
+      [purchaseId, tenantId],
+    );
+    if (!docs.rows[0]) throw new AppError(ErrorCodes.invalidSourceDocument, 'Upload a source document first', 400);
+    await client.query(
+      `UPDATE purchase_invoices
+       SET ocr_status = 'PROCESSING', ocr_provider = $3, ocr_error = NULL, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2`,
+      [purchaseId, tenantId, provider.name],
+    );
+    return { documentId: String(docs.rows[0].document_id), invoice: invoice.rows[0] };
+  });
+
+  const download = await getDocumentDownload(pool, tenantId, source.documentId);
+  const data = await storage.get(download.storageKey);
+  let result: OcrResult;
+  try {
+    result = await provider.extract({
+      originalFilename: download.filename,
+      mimeType: download.mimeType,
+      data,
+    });
+  } catch (error) {
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query(
+        `UPDATE purchase_invoices
+         SET ocr_status = 'FAILED', ocr_error = $3, updated_at = now()
+         WHERE id = $1 AND tenant_id = $2`,
+        [purchaseId, tenantId, error instanceof Error ? error.message.slice(0, 500) : 'OCR failed'],
+      );
+    });
+    throw new AppError(ErrorCodes.extractionFailed, 'OCR could not extract the document', 422);
+  }
+
+  await withTenantTransaction(pool, tenantId, async (client) => {
+    const current = await client.query(
+      `SELECT status FROM purchase_invoices WHERE id = $1 AND tenant_id = $2`,
+      [purchaseId, tenantId],
+    );
+    if (!current.rows[0]) throw new AppError(ErrorCodes.purchaseNotFound, 'Purchase document not found', 404);
+    const settings = await ensurePurchaseSettingsRow(client, tenantId);
+    const fieldValues: Array<[string, string | null | undefined, number | null | undefined]> = [
+      ['supplier_name', result.supplierName, result.confidence.supplier_name ?? null],
+      ['business_id', result.businessId, null],
+      ['vat_id', result.vatNumber, null],
+      ['document_number', result.documentNumber, result.confidence.document_number ?? null],
+      ['invoice_date', result.date, result.confidence.date ?? null],
+      ['due_date', result.dueDate, null],
+      ['total', result.total, result.confidence.total ?? null],
+      ['net', result.net, null],
+      ['vat_total', result.vatTotal, null],
+      ['iban', result.iban, null],
+      ['reference', result.reference, null],
+      ['currency', result.currency, null],
+      ['payment_method', result.paymentMethod, null],
+      ['description', result.description, null],
+      ['raw_ocr_metadata', result.rawMetadata ? JSON.stringify(result.rawMetadata) : null, null],
+    ];
+    for (const [field, value, confidence] of fieldValues) {
+      if (!value) continue;
+      await client.query(
+        `INSERT INTO purchase_invoice_extractions
+           (tenant_id, purchase_invoice_id, field_name, value, confidence, source)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (tenant_id, purchase_invoice_id, field_name, source) DO NOTHING`,
+        [tenantId, purchaseId, field, String(value), confidence, `OCR:${provider.name}`],
+      );
+    }
+    let matchedSupplierId: string | null = null;
+    if (!current.rows[0].supplier_id) {
+      const signals: Array<[string, string]> = [];
+      if (result.businessId) signals.push(['business_id', result.businessId]);
+      if (result.vatNumber) signals.push(['vat_id', result.vatNumber]);
+      if (result.supplierName) signals.push(['name', result.supplierName]);
+      for (const [column, value] of signals) {
+        const candidates = await client.query(
+          `SELECT id FROM business_parties
+           WHERE tenant_id = $1 AND is_supplier AND lower(${column}) = lower($2)
+           LIMIT 2`,
+          [tenantId, value],
+        );
+        if (candidates.rows.length === 1) {
+          matchedSupplierId = String(candidates.rows[0].id);
+          break;
+        }
+        if (candidates.rows.length > 1) {
+          matchedSupplierId = null;
+          break;
+        }
+      }
+    }
+    const lineInputs: PurchaseLineDraft[] = [];
+    const ocrLines = result.lines.length > 0 ? result.lines : [{ description: result.description ?? 'Extracted expense', netAmount: result.net ?? result.total }];
+    const taxByRate = new Map<string, string>();
+    for (const line of ocrLines) {
+      const rate = line.taxRate ?? '0';
+      const taxType = line.taxType ?? 'VAT';
+      const key = `${rate}|${taxType}`;
+      let taxCodeId = taxByRate.get(key);
+      if (!taxCodeId) {
+        const found = await client.query(
+          `SELECT id FROM tax_codes
+           WHERE tenant_id = $1 AND rate = $2 AND is_active
+             AND effective_from <= $3::date AND (effective_to IS NULL OR effective_to >= $3::date)
+           ORDER BY CASE WHEN reporting_mapping = 'DOMESTIC_INPUT_VAT' THEN 0 ELSE 1 END
+           LIMIT 1`,
+          [tenantId, rate, result.date ?? new Date().toISOString().slice(0, 10)],
+        );
+        if (found.rows[0]) {
+          taxCodeId = String(found.rows[0].id);
+          taxByRate.set(key, taxCodeId);
+        }
+      }
+      lineInputs.push({
+        description: line.description ?? 'Extracted line',
+        quantity: line.quantity ?? null,
+        unit: line.unit ?? null,
+        unit_price: line.unitPrice ?? null,
+        net_amount: line.netAmount ?? null,
+        tax_code_id: taxCodeId ?? '',
+        tax_rate: rate,
+        tax_type: taxType,
+        expense_account_id: settings.default_expense_account_id ?? '',
+      });
+    }
+    const validated = await validateLines(
+      client,
+      tenantId,
+      result.date ?? source.invoice.invoice_date ?? new Date().toISOString().slice(0, 10),
+      lineInputs,
+      settings.default_expense_account_id,
+    );
+    await client.query(
+      `UPDATE purchase_invoices
+       SET invoice_date = COALESCE($3::date, invoice_date),
+           due_date = COALESCE($4::date, due_date),
+           supplier_invoice_number = COALESCE($5, supplier_invoice_number),
+           supplier_id = COALESCE($6, supplier_id),
+           supplier_snapshot = CASE WHEN $6 IS NOT NULL THEN $7::jsonb ELSE supplier_snapshot END,
+           merchant_name = CASE WHEN supplier_id IS NULL AND merchant_name IS NULL THEN $8 ELSE merchant_name END,
+           ocr_status = 'COMPLETE', ocr_provider = $9, ocr_error = NULL, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2`,
+      [
+        purchaseId,
+        tenantId,
+        result.date ?? null,
+        result.dueDate ?? null,
+        result.documentNumber ?? null,
+        matchedSupplierId,
+        matchedSupplierId
+          ? JSON.stringify({ name: result.supplierName ?? matchedSupplierId, matched_from_ocr: true })
+          : null,
+        result.supplierName ?? null,
+        provider.name,
+      ],
+    );
+    await client.query('DELETE FROM purchase_invoice_lines WHERE purchase_invoice_id = $1 AND tenant_id = $2', [
+      purchaseId,
+      tenantId,
+    ]);
+    await insertPurchaseLines(client, tenantId, purchaseId, validated);
+    const recomputed = totalsOf(validated);
+    await client.query(
+      `UPDATE purchase_invoices
+       SET subtotal = $3, tax_total = $4, total = $5, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2`,
+      [purchaseId, tenantId, recomputed.subtotal, recomputed.taxTotal, recomputed.total],
+    );
+    const updated = await client.query(
+      `SELECT * FROM purchase_invoices WHERE id = $1 AND tenant_id = $2`,
+      [purchaseId, tenantId],
+    );
+    if (updated.rows[0]) {
+      const warning = await detectDuplicateWarning(client, tenantId, updated.rows[0]);
+      await client.query(
+        `UPDATE purchase_invoices SET duplicate_warning = $3, updated_at = now()
+         WHERE id = $1 AND tenant_id = $2`,
+        [purchaseId, tenantId, warning],
+      );
+    }
+  });
+  return getPurchase(pool, tenantId, purchaseId);
 }
 
 export async function attachPurchaseDocument(

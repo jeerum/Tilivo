@@ -159,14 +159,14 @@ describe.skipIf(!adminUrl || !runtimeUrl)('v0.4 -> v0.5 upgrade migration', () =
     expect(oldTables.rows[0]!.count).toBe(0);
 
     // Apply all remaining release migrations (v0.5 accounting, v0.6 sales,
-    // v0.7 purchases, v0.7.5 business registry, v0.8 accounting core and
-    // v0.9 VAT engine).
+    // v0.7 purchases, v0.7.5 business registry, v0.8 accounting core,
+    // v0.9 VAT engine and v0.10 purchases/receipts).
     await runMigrations(withDatabase(adminUrl!, dbName));
     const after = await adminDb.query('SELECT count(*)::int AS count FROM pgmigrations');
     // Release migrations after v0.4: accounting core, hardening, tax
     // uniqueness, v0.6 sales core, v0.7 purchases core, v0.7.5 registry,
-    // v0.8 accounting core and v0.9 VAT engine.
-    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 8);
+    // v0.8 accounting core, v0.9 VAT engine and v0.10 purchases/receipts.
+    expect(after.rows[0]!.count).toBe(V0_4_COUNT + 10);
 
     // v0.4 data survived.
     const tenant = await adminDb.query(

@@ -18,8 +18,9 @@ import {
   type TaxCodeView,
 } from '../lib/tax';
 import { BusinessRegistrySearch } from './BusinessRegistrySearch';
+import { ReceiptsPage } from './ReceiptsPage';
 
-type PurchaseView = 'suppliers' | 'purchases' | 'inbox';
+type PurchaseView = 'suppliers' | 'purchases' | 'receipts' | 'inbox';
 type PurchaseStatus = 'DRAFT' | 'NEEDS_REVIEW' | 'READY_FOR_APPROVAL' | 'APPROVED' | 'POSTED' | 'REJECTED' | 'CORRECTED';
 
 interface Supplier {
@@ -434,6 +435,7 @@ export function PurchasesPage() {
         {(
           [
             ['purchases', 'purchaseInvoices'],
+            ['receipts', 'receipts'],
             ['suppliers', 'suppliers'],
             ['inbox', 'purchaseInbox'],
           ] as Array<[PurchaseView, string]>
@@ -443,6 +445,10 @@ export function PurchasesPage() {
           </button>
         ))}
       </nav>
+
+      {view === 'receipts' && tenantId && (
+        <ReceiptsPage tenantId={tenantId} headers={headers} />
+      )}
 
       {view === 'suppliers' && (
         <section data-testid="suppliers-panel">

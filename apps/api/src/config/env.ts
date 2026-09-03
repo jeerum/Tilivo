@@ -57,6 +57,7 @@ const AppEnvSchema = z.object({
   BUSINESS_REGISTRY_CACHE_TTL_SECONDS: optionalInt(43_200, 60, 7 * 24 * 60 * 60),
   BUSINESS_REGISTRY_RATE_LIMIT_PER_MINUTE: optionalInt(20, 1, 600),
   RATE_LIMIT_MAX: optionalInt(300, 10, 1_000_000),
+  OCR_DRIVER: z.enum(['mock', 'none']).default('mock'),
 });
 
 export type AppConfig = z.infer<typeof AppEnvSchema>;

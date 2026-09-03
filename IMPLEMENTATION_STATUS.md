@@ -2,7 +2,18 @@
 
 ## Current version
 
-**v0.9 (VAT / ALV Engine) - COMPLETE / GATE PASS**
+**v0.10 (Purchases & Receipts) - COMPLETE / GATE PASS**
+
+Gate validated:
+- migrations `20260907000000_purchases_receipts_v10` and
+  `20260907010000_purchase_merchant_review` (17 total);
+- API tests 186/186 PASS, 0 skipped (v0.10 unit 9 + integration 6 plus full
+  regression v0.5-v0.9);
+- web unit tests 16/16 PASS; lint/typecheck/build PASS;
+- Playwright VAT + Receipts browser QA 9/9 PASS
+  (desktop/tablet/mobile).
+
+Previous v0.9 gate:
 
 Gate validated:
 - migration `20260906000000_vat_engine_v09` runs cleanly on dev + test DB
@@ -52,6 +63,7 @@ Security review: v0.2 CRITICAL/HIGH 0 open
 - v0.7.5 Business Registry Integration (see below).
 - v0.8 Accounting Core 1 (see below).
 - v0.9 VAT / ALV Engine (see below).
+- v0.10 Purchases & Receipts (see below).
 
 ## v0.5 Accounting Core
 
@@ -294,6 +306,20 @@ ehitatakse täisväärtuslikku Soome raamatupidamistarkvara.
   (desktop/tablet/mobile sales RC + purchase partial + summary + journal).
 - Full API regression 171/171 PASS on fresh test DB; lint/typecheck/build
   PASS; docs `docs/VAT_ENGINE.md` + `docs/VAT_ENGINE_GAP_ANALYSIS.md`.
+
+## v0.10 Purchases & Receipts
+
+- Recovery commit `ffa99d1` before v0.10 work.
+- Unified purchase-document model: document types, payment methods/status,
+  merchant-only receipts, OCR state, duplicate warnings; payment
+  counter-account mappings in purchase settings.
+- Receipts tab in Purchases (desktop/mobile), Add receipt, upload/camera,
+  OCR via provider abstraction (deterministic mock), supplier matching with
+  ambiguity guard, heuristic + SHA-256 duplicate warnings.
+- Payment-aware posting: AP, cash, company-card clearing, employee payable;
+  all through Accounting Core + VAT engine; posted documents immutable.
+- Unit 9, integration 6, web 16, Playwright VAT+Receipts 9/9
+  (desktop/tablet/mobile); full API regression 186/186 PASS, 0 skipped.
 
 ## Tests
 

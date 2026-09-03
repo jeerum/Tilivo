@@ -22,11 +22,13 @@ import {
   postPurchaseInvoice,
   rejectPurchaseInvoice,
   reviewPurchaseInvoice,
+  runPurchaseOcr,
   setSupplierActive,
   updatePurchaseInvoiceDraft,
   updatePurchaseSettings,
   updateSupplier,
 } from '../services/purchaseService';
+import { createDocumentOcrProvider } from '../services/ocrService';
 import { resolveSessionUser } from '../services/sessionContext';
 import { requirePermission, resolveTenantAccess } from '../services/tenantService';
 import { writeAuditEvent } from '../services/audit';
@@ -73,18 +75,27 @@ const purchaseLineSchema = z.object({
   tax_code_id: z.string().regex(UUID_RE),
   tax_type: z.string().trim().max(40).nullable().optional(),
   deductible_percent: decimalString.nullable().optional(),
-  expense_account_id: z.string().regex(UUID_RE),
+  expense_account_id: z.string().regex(UUID_RE).nullable().optional(),
   cost_center: z.string().trim().max(120).nullable().optional(),
 });
 
 const purchaseDraftSchema = z.object({
-  supplier_id: z.string().regex(UUID_RE),
+  supplier_id: z.string().regex(UUID_RE).nullable().optional(),
+  merchant_name: z.string().trim().max(300).nullable().optional(),
   supplier_invoice_number: z.string().trim().max(100).optional(),
   invoice_date: z.string().regex(DATE_RE),
   due_date: z.string().regex(DATE_RE).optional(),
   currency_code: z.string().trim().length(3).optional(),
   supplier_reference: z.string().trim().max(200).optional(),
   supplier_iban: z.string().trim().max(64).nullable().optional(),
+  document_type: z
+    .enum(['PURCHASE_INVOICE', 'RECEIPT', 'CREDIT_NOTE', 'CASH_EXPENSE', 'CARD_EXPENSE'])
+    .optional(),
+  payment_method: z
+    .enum(['BANK_TRANSFER', 'COMPANY_CARD', 'CASH', 'PERSONAL_CARD', 'EMPLOYEE_PAID', 'OTHER'])
+    .optional(),
+  payment_status: z.enum(['UNPAID', 'PAID', 'PARTIALLY_PAID', 'PAID_AT_PURCHASE']).optional(),
+  description: z.string().trim().max(1000).nullable().optional(),
   lines: z.array(purchaseLineSchema).min(1).max(200),
 });
 
@@ -94,6 +105,9 @@ const settingsSchema = z.object({
   input_vat_account_id: z.string().regex(UUID_RE).nullable().optional(),
   reverse_charge_input_account_id: z.string().regex(UUID_RE).nullable().optional(),
   reverse_charge_output_account_id: z.string().regex(UUID_RE).nullable().optional(),
+  cash_account_id: z.string().regex(UUID_RE).nullable().optional(),
+  company_card_account_id: z.string().regex(UUID_RE).nullable().optional(),
+  employee_payable_account_id: z.string().regex(UUID_RE).nullable().optional(),
   require_separate_approver: z.boolean().optional(),
   auto_post_on_approval: z.boolean().optional(),
   default_currency: z.string().trim().length(3).optional(),
@@ -285,6 +299,9 @@ export async function purchaseRoutes(app: FastifyInstance, options: PurchaseRout
     return listPurchases(db, tenantId, {
       status: status as any,
       supplierId: typeof query.supplier_id === 'string' ? query.supplier_id : undefined,
+      documentType: typeof query.document_type === 'string' ? query.document_type.toUpperCase() : undefined,
+      paymentMethod: typeof query.payment_method === 'string' ? query.payment_method.toUpperCase() : undefined,
+      duplicateWarning: query.duplicate_warning === 'true',
       from: typeof query.from === 'string' ? query.from : undefined,
       to: typeof query.to === 'string' ? query.to : undefined,
       source: typeof query.source === 'string' ? query.source : undefined,
@@ -506,6 +523,27 @@ export async function purchaseRoutes(app: FastifyInstance, options: PurchaseRout
     await requirePermission(db, userId, tenantId, 'purchase.read');
     const imports = await listPurchaseImports(db, tenantId);
     return { imports };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/v1/purchases/:id/ocr', async (request) => {
+    const { userId, tenantId } = await context(request, db, config);
+    await requirePermission(db, userId, tenantId, 'purchase.edit');
+    const purchaseId = idParam(request.params.id);
+    const provider = createDocumentOcrProvider(config.OCR_DRIVER);
+    const purchase = await runPurchaseOcr(db, tenantId, userId, purchaseId, provider, storage);
+    await writeAuditEvent(db, 'PURCHASE.OCR_PROCESSED', request, {
+      userId,
+      tenantId,
+      objectType: 'purchase_invoice',
+      objectId: purchaseId,
+      metadata: {
+        purchase_invoice_id: purchaseId,
+        provider: provider.name,
+        ocr_status: String(purchase.ocr_status ?? ''),
+        total: String(purchase.total ?? ''),
+      },
+    });
+    return { purchase };
   });
 
   // Documents ----------------------------------------------------------------

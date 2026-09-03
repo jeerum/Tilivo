@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.0] - 2026-09-03
+
+- Pre-v0.10 recovery commit `ffa99d1` (v0.7.5-v0.9 foundation).
+- Unified purchase-document model on existing purchases:
+  `document_type`, `payment_method`, `payment_status`, `merchant_name`,
+  `description`, `ocr_status/provider/error`, `duplicate_warning`;
+  payment counter-account settings (cash, company card, employee payable).
+- Receipt workflow: Receipts tab + Add receipt, file/camera upload,
+  OCR via `DocumentOcrProvider` abstraction with deterministic mock,
+  supplier matching/ambiguity, duplicate heuristics + SHA-256 warnings.
+- Payment-aware posting: unpaid -> AP; cash -> cash; company card ->
+  card clearing; personal card/employee-paid -> employee payable.
+- Merchant-only receipts no longer require a supplier master record
+  (review trigger relaxed to require only a confirmed snapshot).
+- Migrations `20260907000000_purchases_receipts_v10` and
+  `20260907010000_purchase_merchant_review`.
+- Docs `PURCHASES_RECEIPTS.md` + gap analysis; status/changelog updated.
+- Tests: v0.10 unit 9, integration 6, browser E2E desktop/tablet/mobile.
+
 ## [0.9.0] - 2026-09-03
 
 - VAT / ALV engine: semantic tax-code model (`direction`, `treatment`,

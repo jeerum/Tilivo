@@ -30,7 +30,7 @@ export class ApiError extends Error {
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
-  body?: Record<string, unknown>;
+  body?: Record<string, unknown> | FormData;
   csrf?: string;
   headers?: Record<string, string>;
 }
@@ -39,14 +39,18 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   const headers: Record<string, string> = {
     accept: 'application/json',
   };
-  if (options.body) headers['content-type'] = 'application/json';
+  if (options.body && !(options.body instanceof FormData)) headers['content-type'] = 'application/json';
   if (options.csrf) headers['x-csrf-token'] = options.csrf;
   if (options.headers) Object.assign(headers, options.headers);
 
   const response = await fetch(path, {
     method: options.method ?? 'GET',
     headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    body: options.body
+      ? options.body instanceof FormData
+        ? options.body
+        : JSON.stringify(options.body)
+      : undefined,
   });
 
   const payload: any = await (async () => {
